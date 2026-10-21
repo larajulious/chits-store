@@ -9,14 +9,14 @@ export type Avatar = AvatarId
 export type Player = { id:string;nickname:string;avatar:string;x:number;y:number }
 export type BoardOrder = { id:number;number:string;status:OrderStatus }
 export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean;petCat:()=> 'petted'|'too_far'|'busy';showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void }
-type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onCatHint:()=>void;catEnabled?:boolean;guideEnabled?:boolean;reducedMotion?:boolean;controlsEnabled?:boolean}
+type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onCatHint:()=>void;onCatMeow:()=>void;catEnabled?:boolean;guideEnabled?:boolean;reducedMotion?:boolean;controlsEnabled?:boolean}
 type Character = {sprite:Phaser.GameObjects.Image;avatar:string;phase:number}
 type VisitorCharacter = Character & {label:Phaser.GameObjects.Text;movingUntil:number;bubble?:Phaser.GameObjects.Text|Phaser.GameObjects.Image}
 function characterPhase(id:string){let hash=0;for(const char of id)hash=(hash*31+char.charCodeAt(0))>>>0;return hash%6000}
 // Phaser queues a full display-list sort on every setDepth call, even if the value is unchanged.
 function setDepthIfChanged(object:Phaser.GameObjects.Image|Phaser.GameObjects.Text,depth:number){if(object.depth!==depth)object.setDepth(depth)}
 const W=360,H=580,CELL=20
-const VISITOR_SCALE=1.15,STAFF_SCALE=1.25,NAME_LABEL_OFFSET=30
+const VISITOR_SCALE=1.15,STAFF_SCALE=1.25,NAME_LABEL_OFFSET=40
 const tables=[new Phaser.Geom.Rectangle(48,328,87,60),new Phaser.Geom.Rectangle(228,365,86,58)]
 const feedbackArea=new Phaser.Geom.Rectangle(282,472,44,40)
 const obstructions=[...tables,feedbackArea]
@@ -70,6 +70,9 @@ class StoreScene extends Phaser.Scene {
   private orderBoardText?:Phaser.GameObjects.Text
   private catSprite?:Phaser.GameObjects.Image
   private catLabel?:Phaser.GameObjects.Text
+  private catBubble?:Phaser.GameObjects.Text
+  private catBubbleTimer?:Phaser.Time.TimerEvent
+  private lastMeowAt=-Infinity
   private yarnSprite?:Phaser.GameObjects.Image
   private mascot?:ReturnType<typeof createLocalMascot>
   private draggingYarn?:{pointerId:number;lastX:number;lastY:number;lastAt:number;previousX:number;previousY:number;previousAt:number}
@@ -124,6 +127,17 @@ class StoreScene extends Phaser.Scene {
       ...(this.opts.guideEnabled===false?[]:[['menu-guide',0xf3cf82,0x8c6242] as const]),
     ] as const){
       const art=this.make.graphics({x:0,y:0})
+      const mascotBody=name!=='cashier'&&name!=='chef'
+      // Visitors and the walking menu guide share one small full-body silhouette.
+      // Draw it behind each food-shaped head so every avatar keeps its own face.
+      if(mascotBody){
+        art.fillStyle(0x674731).fillRect(10,45,6,3).fillRect(20,45,6,3)
+        art.fillStyle(0x56704e).fillRect(11,40,5,6).fillRect(20,40,5,6)
+        art.fillStyle(body).fillRect(5,30,5,12).fillRect(25,30,5,12)
+        art.fillStyle(0x7d9b67).fillRoundedRect(9,26,17,18,3)
+        art.fillStyle(0x608256).fillRect(6,32,4,7).fillRect(25,32,4,7)
+        art.fillStyle(0xe9d9ae).fillRect(13,34,9,10)
+      }
       if(name==='mochi'){
         art.fillStyle(detail).fillEllipse(17,23,30,18)
         art.fillStyle(body).fillEllipse(17,16,30,26).fillEllipse(17,22,30,14)
@@ -193,9 +207,9 @@ class StoreScene extends Phaser.Scene {
       }
       if(name==='cashier'){art.fillStyle(0x4d7857).fillRect(6,26,22,5)}
       art.fillStyle(0x33251f).fillRect(9,14,3,1).fillRect(22,14,3,1)
-      art.generateTexture(`${name}-blink`,34,34)
+      art.generateTexture(`${name}-blink`,34,mascotBody?48:34)
       art.fillStyle(0x33251f).fillRect(9,12,3,4).fillRect(22,12,3,4)
-      art.generateTexture(name,34,34);art.destroy()
+      art.generateTexture(name,34,mascotBody?48:34);art.destroy()
     }
     for(const reaction of reactionOptions){
       const art=this.make.graphics({x:0,y:0})
@@ -249,7 +263,7 @@ class StoreScene extends Phaser.Scene {
         this.draggingYarn={pointerId:pointer.id,lastX:x,lastY:y,lastAt:now,previousX:x,previousY:y,previousAt:now}
         return
       }
-      if(this.catSprite&&Math.abs(x-this.catSprite.x)<27&&Math.abs(y-this.catSprite.y)<24){if(this.petCat()==='too_far')this.opts.onCatHint();return}
+      if(this.catSprite&&Math.abs(x-this.catSprite.x)<27&&Math.abs(y-this.catSprite.y)<24){const result=this.petCat();if(result!=='petted')this.meow();if(result==='too_far')this.opts.onCatHint();return}
       if(y<198&&x>185){this.walkTo(272,277,()=>this.opts.onInteract('board'));return}
       if(y<195&&x<175){this.walkTo(93,273,()=>this.opts.onInteract('chef'));return}
       if(y<256&&x>32){this.walkTo(177,273,()=>this.opts.onInteract('cashier'));return}
@@ -310,13 +324,25 @@ class StoreScene extends Phaser.Scene {
     ball.generateTexture('yarn-ball',23,21);ball.destroy()
   }
   tossYarn(){return this.mascot?.toss(this.time.now)??false}
-  petCat(){return this.mascot?.pet({x:this.self?.sprite.x??180,y:this.self?.sprite.y??510},this.time.now)??'busy'}
+  petCat(){const result=this.mascot?.pet({x:this.self?.sprite.x??180,y:this.self?.sprite.y??510},this.time.now)??'busy';if(result==='petted')this.meow();return result}
+  private meow(){
+    const cat=this.catSprite
+    if(!cat||this.time.now-this.lastMeowAt<1200)return
+    this.lastMeowAt=this.time.now
+    this.catBubbleTimer?.remove(false)
+    this.catBubble?.destroy()
+    const bubble=this.add.text(cat.x,cat.y-49,'meow meow',{fontFamily:'monospace',fontSize:'11px',color:'#513826',backgroundColor:'#fff6de',padding:{x:6,y:4}}).setOrigin(.5,1).setDepth(900)
+    this.catBubble=bubble
+    this.catBubbleTimer=this.time.delayedCall(2200,()=>{if(this.catBubble===bubble)this.catBubble=undefined;bubble.destroy();this.catBubbleTimer=undefined})
+    this.opts.onCatMeow()
+  }
   private updateMascot(delta:number){
     if(!this.mascot)return
     this.mascot.tick(this.time.now,delta)
     const snapshot=this.mascot.snapshot(this.time.now),cat=this.catSprite,ball=this.yarnSprite,label=this.catLabel
     if(!cat||!ball||!label)return
     cat.setPosition(snapshot.cat.x,snapshot.cat.y)
+    this.catBubble?.setPosition(cat.x,cat.y-49)
     ball.setPosition(snapshot.yarn.x,snapshot.yarn.y)
     const mood:CatMood=snapshot.cat.mood
     const texture=mood==='walking'||mood==='approaching_yarn'||mood==='returning_to_idle'?(Math.floor(this.time.now/180)%2?'cat-walk':'cat-idle'):
@@ -491,8 +517,8 @@ class StoreScene extends Phaser.Scene {
   }
   private makeBubble(sprite:Phaser.GameObjects.Image,text:string){
     const reaction=reactionOptions.find(option=>option.emoji===text)
-    if(reaction)return this.add.image(sprite.x,sprite.y-53,`reaction-${reaction.id}`).setDepth(900)
-    return this.add.text(sprite.x,sprite.y-53,text.slice(0,32),{fontFamily:'monospace',fontSize:'10px',color:'#3c281e',backgroundColor:'#fff6de',padding:{x:6,y:4},wordWrap:{width:140}}).setOrigin(.5).setDepth(900)
+    if(reaction)return this.add.image(sprite.x,sprite.y-75,`reaction-${reaction.id}`).setDepth(900)
+    return this.add.text(sprite.x,sprite.y-64,text.slice(0,32),{fontFamily:'monospace',fontSize:'10px',color:'#3c281e',backgroundColor:'#fff6de',padding:{x:6,y:4},wordWrap:{width:140}}).setOrigin(.5).setDepth(900)
   }
   showStaffBubble(text:string){
     if(!this.cashier)return

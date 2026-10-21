@@ -22,6 +22,9 @@ const hasCurrentMenu=computed(()=>Boolean(menu.value.version&&menu.value.date===
 const visitorAvatar=computed(()=>isAvatar(me.value?.avatar)?me.value.avatar:'mochi')
 const online=computed(()=>players.value.length)
 const overlay=ref(''), message=ref(''), chat=ref<ChatMessage[]>([]), notice=ref(''), connected=ref(false), returningHome=ref(false), chatEnabled=ref(true)
+const musicPlaying=ref(false), musicMuted=ref(false)
+const musicPreferenceKey='chits-store-music-muted'
+let music:HTMLAudioElement|undefined, musicStarting=false, musicGestureListening=false
 const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean|undefined;petCat:()=> 'petted'|'too_far'|'busy'|undefined}|null>(null)
 const leaveDialog=ref<{open:()=>void;close:()=>void}|null>(null),leaving=ref(false)
 const visitThanks=useState<boolean>('visit-thanks',()=>false)
@@ -34,10 +37,52 @@ const statusOptions:Status[]=['Preparing','Ready','Served','Delivered']
 onMounted(async()=>{
   document.addEventListener('visibilitychange',onVisibilityChanged)
   scheduleNextMenuDay()
-  try { me.value=await $fetch<Me>('/api/me');void loadMenu();await loadBoard();if(alive){connect();boardRefresh=setInterval(()=>void loadBoard(),30_000)} }
+  try { me.value=await $fetch<Me>('/api/me');if(alive)setupMusic();void loadMenu();await loadBoard();if(alive){connect();boardRefresh=setInterval(()=>void loadBoard(),30_000)} }
   catch { void returnHome() }
 })
-onBeforeUnmount(()=>{alive=false;document.removeEventListener('visibilitychange',onVisibilityChanged);clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearTimeout(menuDayTimer);socket?.close()})
+onBeforeUnmount(()=>{alive=false;document.removeEventListener('visibilitychange',onVisibilityChanged);stopMusic();clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearTimeout(menuDayTimer);socket?.close()})
+function listenForMusicGesture(){
+  if(musicGestureListening)return
+  document.addEventListener('pointerdown',onMusicGesture)
+  document.addEventListener('keydown',onMusicGesture)
+  musicGestureListening=true
+}
+function stopListeningForMusicGesture(){
+  if(!musicGestureListening)return
+  document.removeEventListener('pointerdown',onMusicGesture)
+  document.removeEventListener('keydown',onMusicGesture)
+  musicGestureListening=false
+}
+function onMusicGesture(event:Event){
+  if((event.target as Element|null)?.closest?.('.music-toggle'))return
+  void startMusic()
+}
+function setupMusic(){
+  try{musicMuted.value=localStorage.getItem(musicPreferenceKey)==='true'}catch{}
+  music=new Audio('/chits-store-cozy-cafe-loop.mp3')
+  music.loop=true
+  music.volume=.12
+  music.preload='none'
+  if(!musicMuted.value){listenForMusicGesture();void startMusic()}
+}
+async function startMusic(){
+  const track=music
+  if(!track||musicMuted.value||musicStarting||!alive||returningHome.value||document.hidden||!track.paused)return
+  musicStarting=true
+  try{
+    await track.play()
+    if(!alive||musicMuted.value||returningHome.value||document.hidden){track.pause();return}
+    musicPlaying.value=true
+    stopListeningForMusicGesture()
+  }catch{musicPlaying.value=false}
+  finally{musicStarting=false}
+}
+function toggleMusic(){
+  if(musicPlaying.value){musicMuted.value=true;music?.pause();musicPlaying.value=false;stopListeningForMusicGesture()}
+  else{musicMuted.value=false;listenForMusicGesture();void startMusic()}
+  try{localStorage.setItem(musicPreferenceKey,String(musicMuted.value))}catch{}
+}
+function stopMusic(){music?.pause();music=undefined;musicPlaying.value=false;stopListeningForMusicGesture()}
 async function loadBoard(){try{board.value=await $fetch<PublicOrder[]>('/api/orders/board')}catch{}}
 function manilaDate(){
   const parts=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date())
@@ -79,7 +124,8 @@ function onMenuUpdated(version:unknown){
   if(overlay.value==='menu'&&!document.hidden)void loadMenu(true)
 }
 function onVisibilityChanged(){
-  if(document.hidden){hiddenAt=Date.now();return}
+  if(document.hidden){music?.pause();musicPlaying.value=false;hiddenAt=Date.now();return}
+  if(!musicMuted.value){listenForMusicGesture();void startMusic()}
   if(menuStale||menu.value.date!==manilaDate()||(hiddenAt&&Date.now()-hiddenAt>5000)){
     menuStale=true;menuEpoch++;void loadMenu(true)
   }
@@ -88,6 +134,7 @@ function onVisibilityChanged(){
 async function returnHome(){
   if(!alive||returningHome.value)return
   returningHome.value=true
+  stopMusic()
   clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearTimeout(menuDayTimer)
   const current=socket;socket=null;current?.close()
   try{const result=await navigateTo('/',{replace:true});if(result===false)window.location.replace('/')}
@@ -160,11 +207,10 @@ async function leave(){
 <template><main class="game-shell structured-store">
   <header class="structured-store-top">
     <div class="visitor-identity"><span class="visitor-portrait"><AvatarIcon :avatar="visitorAvatar"/></span><div><strong>CHITS STORE</strong><span>{{ me?.nickname || 'Public bakery' }}</span></div></div>
-    <div class="visit-status"><span class="pill" :class="{ready:connected}">{{ connected?'● Connected':'○ Connecting' }}</span><span class="visitor-count"><StoreGlyph name="people"/>{{ online }} online</span></div>
+    <div class="visit-status"><span class="pill" :class="{ready:connected}">{{ connected?'● Connected':'○ Connecting' }}</span><div class="visit-tools"><span class="visitor-count"><StoreGlyph name="people"/>{{ online }} online</span><button type="button" class="music-toggle" :aria-label="musicPlaying?'Mute background music':'Play background music'" :aria-pressed="musicPlaying" :disabled="!me||returningHome" @click="toggleMusic"><span aria-hidden="true">♫</span>{{ musicPlaying?'ON':'OFF' }}</button></div></div>
   </header>
   <template v-if="me&&!returningHome">
-    <div v-if="notice" class="row between structured-notice" style="padding:10px;background:#e7f3d4"><strong style="font-size:.85rem">{{ notice }}</strong><button class="btn small secondary" aria-label="Dismiss notice" @click="notice=''">✕</button></div>
-    <div class="bakery-status-strip"><span>INSIDE THE MERYENDA HUB</span><div><span>{{ preparing }} preparing</span><span class="ready-count">{{ ready }} ready</span></div></div>
+    <div class="bakery-status-strip"><span>INSIDE THE MERYENDA HUB</span><div><span>{{ preparing }} preparing</span><span class="ready-count">{{ ready }} ready</span></div><aside v-if="notice" class="structured-notice" role="status"><strong>{{ notice }}</strong><button type="button" aria-label="Dismiss notice" @click="notice=''">✕</button></aside></div>
     <div class="game-stage">
       <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact" @cat-hint="notice='Walk closer to Miming to pet the cat.'"/></ClientOnly>
     </div>
@@ -177,8 +223,8 @@ async function leave(){
       <button type="button" @click="leaveDialog?.open()"><StoreGlyph name="door"/><span>Leave</span></button>
     </nav>
     <div v-if="catEnabled" class="help-text structured-hint" style="background:#fff7e8;text-align:center;padding-bottom:9px"><span>Drag yarn · tap Miming to pet</span><button type="button" class="yarn-toss" :disabled="!!overlay" @click="petCat">Pet cat</button><button type="button" class="yarn-toss" aria-label="Toss yarn for Miming the shop cat" :disabled="!!overlay" @click="game?.tossYarn()">Toss yarn</button></div>
-    <div v-if="overlay" class="overlay-shade" @click.self="overlay=''">
-      <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback'}" role="dialog" aria-labelledby="store-dialog-title">
+    <div v-if="overlay" class="overlay-shade" :class="{'chat-overlay':overlay==='chat'}" @click.self="overlay=''">
+      <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback','chat-dialog':overlay==='chat'}" role="dialog" aria-labelledby="store-dialog-title">
         <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ {chat:'Community Chat',menu:"Today's Menu",board:'Live Order Board',cashier:'Cashier',chef:'Chef',seat:'Take a Seat',emotes:'Reactions',feedback:'Feedback box'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
         <FeedbackBox v-if="overlay==='feedback'" ref="feedbackBox"/>
         <template v-if="overlay==='menu'">
@@ -211,11 +257,15 @@ async function leave(){
 .structured-store{width:min(100%,480px);height:calc(100dvh - 48px);min-height:640px;max-height:960px;margin:24px auto;overflow:hidden;border:1px solid #d8c6ad;border-radius:22px;background:#fffaf1;box-shadow:0 12px 36px #64442d12}
 .structured-store-top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;background:#fffaf1;border-bottom:1px solid #e7dac8;flex-shrink:0}
 .visitor-identity{display:flex;align-items:center;gap:10px;min-width:0}.visitor-portrait{width:42px;height:42px;border:1px solid #e5d8c0;border-radius:12px;background:#efe4d0;display:grid;place-items:center;flex-shrink:0}.visitor-portrait :deep(.avatar-symbol){transform:scale(.78)}.visitor-identity strong{display:block;font-size:12px;letter-spacing:.12em;color:#523b2a}.visitor-identity div>span{display:block;margin-top:5px;font-size:11px;color:#9b8065;overflow-wrap:anywhere}.visit-status{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}.visit-status .pill{padding:4px 8px;font-size:10px}.visitor-count{display:flex;align-items:center;gap:5px;font-size:10px;color:#8f795e}.visitor-count svg{width:13px;height:13px}
-.bakery-status-strip{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;padding:11px 18px;background:#f5ecdd;border-bottom:1px solid #d8c09e}.bakery-status-strip>span{color:#9c7f5a;font-size:9px;letter-spacing:.1em;font-weight:800}.bakery-status-strip>div{display:flex;gap:12px;color:#9a7554;font-size:10px}.bakery-status-strip .ready-count{color:#647d52;font-weight:700}
+.bakery-status-strip{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;padding:11px 18px;background:#f5ecdd;border-bottom:1px solid #d8c09e}.bakery-status-strip>span{color:#9c7f5a;font-size:9px;letter-spacing:.1em;font-weight:800}.bakery-status-strip>div{display:flex;gap:12px;color:#9a7554;font-size:10px}.bakery-status-strip .ready-count{color:#647d52;font-weight:700}
 .structured-store .game-stage{flex:1;min-height:0;background:#dab080}.structured-actions{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;padding:12px 14px 10px;background:#fffaf1;border-top:1px solid #e1ccb0;flex-shrink:0}.structured-actions button,.structured-actions a{min-width:0;min-height:59px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:#f7efe1;border:1px solid #e6d7c0;border-radius:12px;color:#86694a;text-decoration:none;font-size:10px;font-weight:800;box-shadow:none}.structured-actions button:hover,.structured-actions a:hover{background:#eee0c9;border-color:#cdb18b;color:#65462d}.structured-actions svg{width:20px;height:20px}.structured-actions button:focus-visible,.structured-actions a:focus-visible{outline:3px solid #6c875d;outline-offset:2px}
 .structured-store .structured-hint{background:#fffaf1!important;color:#a08a70;font-size:9px;padding:0 12px 12px!important;flex-shrink:0}.structured-notice{border-bottom:1px solid #d3dfc0;flex-shrink:0}.structured-notice strong{font-size:11px!important;font-weight:700;color:#577149}.structured-notice button{padding:4px 7px;border:0;background:transparent;box-shadow:none;color:#70845b}.structured-store .overlay-shade{padding:14px;background:#33271985;backdrop-filter:blur(2px)}.structured-store .overlay-panel{padding:20px;background:#fffaf1;border:1px solid #ddcbb3;border-radius:20px;box-shadow:0 6px 24px #3c281e21;gap:16px}.structured-store .overlay-panel .section-head{font-size:19px;letter-spacing:-.04em;color:#533d2b}.structured-store .overlay-panel .btn.secondary{box-shadow:none;border-width:1px;background:#f4ead9}.structured-store .chat-messages{border:1px solid #e8dac5;background:#f7f0e4;padding:12px;height:220px}.structured-store .chat-line{font-size:12px;line-height:1.6}.structured-store .chat-line strong{color:#886748}.structured-store .privacy{margin:0;font-size:10px;line-height:1.7;color:#9b846a}.structured-store .overlay-panel .input{font-size:12px;border-width:1px;background:#fffdf7;padding:11px 12px}.structured-store .overlay-panel .pill{font-size:11px;padding:7px 10px}.structured-store>.page{min-height:0;flex:1;font-size:12px;color:#90775d}
 .structured-store .structured-hint{display:flex;align-items:center;justify-content:center;gap:8px;min-height:36px;padding:2px 12px 9px!important;line-height:1.3}.structured-hint span{min-width:0}.structured-store .yarn-toss{flex-shrink:0;min-height:27px;padding:3px 7px;border:1px solid #8b6888;border-radius:4px;background:#e6cfdf;box-shadow:2px 2px 0 #8b6888;color:#553e5a;font:700 9px Silkscreen,monospace;cursor:pointer}.structured-store .yarn-toss:focus-visible{outline:3px solid #6c875d;outline-offset:2px}.structured-store .yarn-toss:disabled{opacity:.5;cursor:default}
 .structured-store .game-stage :deep(canvas){touch-action:none}
+.visit-tools{display:flex;align-items:center;gap:8px}.music-toggle{display:inline-flex;align-items:center;justify-content:center;gap:3px;min-width:45px;min-height:24px;padding:2px 4px;border:1px solid #a17b50;border-radius:0;background:#eddbb8;color:#674731;font:9px Silkscreen,monospace;line-height:1}.music-toggle[aria-pressed="true"]{background:#d3e3b1;border-color:#91aa6f;color:#3e5939}.music-toggle span{font:15px 'Courier New',monospace}
+.bakery-status-strip .structured-notice{position:absolute;top:calc(100% + 8px);left:12px;right:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;padding:9px 10px;background:#e7f3d4;border:2px solid #8a9d67;box-shadow:3px 3px 0 #67473155}
+.structured-notice strong{min-width:0;line-height:1.4;overflow-wrap:anywhere}
+.structured-notice button{display:grid;place-items:center;flex-shrink:0;width:32px;height:32px;padding:0;color:#577149;font-size:19px;line-height:1}
 .game-shell .store-dialog{min-width:0;gap:14px;padding:18px;overscroll-behavior:contain}
 .game-shell .feedback-dialog{--feedback-padding:18px}.game-shell .feedback-dialog .dialog-header{position:sticky;top:calc(-1 * var(--feedback-padding));margin-top:calc(-1 * var(--feedback-padding));padding-top:var(--feedback-padding);z-index:1;background:#fff3da}
 .dialog-header{display:grid;grid-template-columns:minmax(0,1fr) 36px;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid #e5d7c3}

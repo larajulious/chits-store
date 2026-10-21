@@ -7,8 +7,15 @@ let api:StoreGame|undefined
 let disposed=false,ready=false
 let pendingStaffMessage:string|undefined
 let motionQuery:MediaQueryList|undefined
+let catMeowAudio:HTMLAudioElement|undefined
 function motionChanged(event:MediaQueryListEvent){api?.setReducedMotion(event.matches)}
 function visibilityChanged(){if(!api)return;if(document.hidden)api.game.loop.sleep();else api.game.loop.wake()}
+function playCatMeow(){
+  catMeowAudio??=new Audio('/Playful_meow_from_a_curious_kitten.mp3')
+  catMeowAudio.volume=.55
+  catMeowAudio.currentTime=0
+  void catMeowAudio.play().catch(()=>{})
+}
 const joystick=ref<HTMLElement>()
 const joyX=ref(0),joyY=ref(0)
 onMounted(async()=>{
@@ -16,13 +23,13 @@ onMounted(async()=>{
   const {createGame}=await import('../../game/createGame')
   if(disposed||!target.value)return
   motionQuery=window.matchMedia('(prefers-reduced-motion: reduce)')
-  api=createGame(target.value,{nickname:props.nickname,avatar:props.avatar as any,onMove:(x,y)=>emit('move',{x,y}),onInteract:kind=>emit('interact',kind),onCatHint:()=>emit('cat-hint'),catEnabled:props.catEnabled,guideEnabled:props.guideEnabled,reducedMotion:motionQuery.matches,controlsEnabled:props.controlsEnabled!==false})
+  api=createGame(target.value,{nickname:props.nickname,avatar:props.avatar as any,onMove:(x,y)=>emit('move',{x,y}),onInteract:kind=>emit('interact',kind),onCatHint:()=>emit('cat-hint'),onCatMeow:playCatMeow,catEnabled:props.catEnabled,guideEnabled:props.guideEnabled,reducedMotion:motionQuery.matches,controlsEnabled:props.controlsEnabled!==false})
   motionQuery.addEventListener('change',motionChanged)
   document.addEventListener('visibilitychange',visibilityChanged)
   visibilityChanged()
   api.game.events.once('ready',()=>{ready=true;api?.setPlayers(props.players,props.selfId);api?.setBoard(props.board);if(pendingStaffMessage!==undefined){api?.showStaffBubble(pendingStaffMessage);pendingStaffMessage=undefined}})
 })
-onBeforeUnmount(()=>{disposed=true;ready=false;pendingStaffMessage=undefined;motionQuery?.removeEventListener('change',motionChanged);document.removeEventListener('visibilitychange',visibilityChanged);api?.game.destroy(true);api=undefined})
+onBeforeUnmount(()=>{disposed=true;ready=false;pendingStaffMessage=undefined;motionQuery?.removeEventListener('change',motionChanged);document.removeEventListener('visibilitychange',visibilityChanged);catMeowAudio?.pause();catMeowAudio=undefined;api?.game.destroy(true);api=undefined})
 watch(()=>[props.players,props.selfId] as const,()=>api?.setPlayers(props.players,props.selfId))
 watch(()=>props.board,()=>api?.setBoard(props.board),{deep:true})
 watch(()=>props.controlsEnabled,enabled=>{end();api?.setControlsEnabled(enabled!==false)})

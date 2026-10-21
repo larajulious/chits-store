@@ -7,7 +7,7 @@ import {createLocalMascot} from './localMascot'
 
 export type Avatar = AvatarId
 export type Player = { id:string;nickname:string;avatar:string;x:number;y:number }
-export type BoardOrder = { id:number;number:string;status:OrderStatus }
+export type BoardOrder = { id:number;number:string;name:string|null;status:OrderStatus }
 export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean;petCat:()=> 'petted'|'too_far'|'busy';showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void }
 type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onCatHint:()=>void;onCatMeow:()=>void;catEnabled?:boolean;guideEnabled?:boolean;reducedMotion?:boolean;controlsEnabled?:boolean}
 type Character = {sprite:Phaser.GameObjects.Image;avatar:string;phase:number}
@@ -276,12 +276,18 @@ class StoreScene extends Phaser.Scene {
     this.input.on('pointerupoutside',(pointer:Phaser.Input.Pointer)=>this.releaseYarn(pointer))
   }
   setBoard(orders:BoardOrder[]){
-    const latest=(status:BoardOrder['status'])=>orders.find(o=>o.status===status)?.number||'—'
+    const label=(order:BoardOrder|undefined)=>{
+      if(!order)return '—'
+      const characters=Array.from(order.name||'')
+      const name=characters.length>12?`${characters.slice(0,11).join('')}…`:characters.join('')
+      return `${order.number}${name?` · ${name}`:''}`
+    }
+    const latest=(status:BoardOrder['status'])=>label(orders.find(o=>o.status===status))
     // The public feed is newest first; keep this small in-game board to five deliveries.
-    const deliveries=orders.filter(o=>o.status==='Served').slice(0,5).map(o=>o.number)
+    const deliveries=orders.filter(o=>o.status==='Served').slice(0,5).map(label)
     if(this.orderBoardText){
       this.orderBoardText.setText(`PREPARING: ${latest('Preparing')}\nREADY: ${latest('Ready')}\nOUT FOR DELIVERY:\n${deliveries.length?deliveries.join('\n'):'—'}`)
-      // Keep even the maximum 24-character order numbers inside the chalkboard.
+      // Keep number and abbreviated name lines inside the chalkboard.
       this.orderBoardText.setScale(Math.min(1,128/this.orderBoardText.width),1)
     }
   }

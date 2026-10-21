@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { orderStatusLabels,orderNextStatus,type OrderStatus } from '../../../shared/order-status'
-type Order = { id:number; number:string; status:OrderStatus; createdAt:number }
+type Order = { id:number; number:string; name:string|null; status:OrderStatus; createdAt:number }
 type RoomState = { chatEnabled:boolean; members:{id:string;visitorId:number;nickname:string;muted:boolean}[] }
 type StoreStatus = {open:boolean}
 const loggedIn=ref(false), checking=ref(true), busy=ref(false), password=ref(''), error=ref('')
@@ -11,6 +11,7 @@ const resetManager=ref<{open:()=>void}|null>(null)
 const chatManager=ref<{refresh:()=>Promise<void>}|null>(null),feedbackManager=ref<{refresh:()=>Promise<void>}|null>(null)
 const orderFilter=ref<OrderStatus>('Preparing'),updatingId=ref<number|null>(null),refreshing=ref(false),lastRefreshed=ref(''),success=ref('')
 const deliveryConfirmation=ref<HTMLDialogElement|null>(null),pendingDelivery=ref<Order|null>(null)
+const createOrderDialog=ref<HTMLDialogElement|null>(null),orderName=ref(''),createOrderError=ref('')
 const preparingCount=computed(()=>orders.value.filter(o=>o.status==='Preparing').length)
 const readyCount=computed(()=>orders.value.filter(o=>o.status==='Ready').length)
 const outForDeliveryCount=computed(()=>orders.value.filter(o=>o.status==='Served').length)
@@ -30,10 +31,13 @@ async function refresh(){const [nextOrders,nextRoom,nextStore]=await Promise.all
 async function reload(){if(refreshing.value)return;refreshing.value=true;error.value='';try{await refresh()}catch(e:any){error.value=e?.data?.statusMessage||'Could not refresh the dashboard'}finally{refreshing.value=false}}
 async function login(){busy.value=true;error.value='';try{await $fetch('/api/admin/login',{method:'POST',body:{password:password.value}});password.value='';loggedIn.value=true;await refresh()}catch(e:any){error.value=e?.data?.statusMessage||'Login failed'}finally{busy.value=false}}
 async function logout(){await $fetch('/api/admin/logout',{method:'POST'});loggedIn.value=false;orders.value=[];success.value='';error.value='';lastRefreshed.value=''}
-async function createOrder(){if(busy.value)return;busy.value=true;error.value='';success.value='';try{
- const {order}=await $fetch<{order:Order}>('/api/admin/orders',{method:'POST',body:{}})
- orderFilter.value='Preparing';await refresh();success.value=`${order.number} created and added to Preparing.`
- }catch(e:any){error.value=e?.data?.statusMessage||'Could not create order'}finally{busy.value=false}}
+function openCreateOrder(){orderName.value='';createOrderError.value='';createOrderDialog.value?.showModal()}
+async function createOrder(){if(busy.value)return;busy.value=true;createOrderError.value='';error.value='';success.value='';try{
+ const {order}=await $fetch<{order:Order}>('/api/admin/orders',{method:'POST',body:{name:orderName.value}})
+ orderFilter.value='Preparing';createOrderDialog.value?.close()
+ try{await refresh();success.value=`${order.number} created and added to Preparing.`}
+ catch{error.value=`${order.number} was created, but the dashboard could not refresh. Use Refresh to see it.`}
+ }catch(e:any){createOrderError.value=e?.data?.statusMessage||'Could not create order'}finally{busy.value=false}}
 async function setStoreAvailability(open:boolean){
  if(storeActionBusy.value)return
  storeActionBusy.value=true;error.value='';success.value=''
@@ -104,10 +108,10 @@ async function onDataReset(options:string[]){
         <div class="dashboard-workspace">
           <section class="orders-column" aria-label="Order management">
             <section class="card order-queue" aria-labelledby="order-queue-heading">
-              <header class="queue-heading"><div><h2 id="order-queue-heading">Order queue</h2><p>Counts and history show your most recent 100 orders.</p><span v-if="lastRefreshed" class="refresh-time">Updated {{ lastRefreshed }}</span></div><button type="button" class="btn queue-create-button" :disabled="busy" @click="createOrder">{{ busy?'Creating…':'+ Create order' }}</button></header>
+              <header class="queue-heading"><div><h2 id="order-queue-heading">Order queue</h2><p>Counts and history show your most recent 100 orders.</p><span v-if="lastRefreshed" class="refresh-time">Updated {{ lastRefreshed }}</span></div><button type="button" class="btn queue-create-button" :disabled="busy" @click="openCreateOrder">+ Create order</button></header>
               <nav class="order-filters" aria-label="Filter orders"><button v-for="filter in filters" :key="filter.value" type="button" :aria-pressed="orderFilter===filter.value" :class="{selected:orderFilter===filter.value}" @click="orderFilter=filter.value">{{ filter.label }}<span>{{ filter.count }}</span></button></nav>
               <div class="order-table-scroll" tabindex="0" aria-label="Order queue records">
-                <table v-if="visibleOrders.length" class="order-table"><caption class="visually-hidden">{{ orderStatusLabels[orderFilter] }} orders, newest first</caption><thead><tr><th scope="col">Order</th><th scope="col">Created</th><th scope="col">Status</th><th scope="col">Next step</th></tr></thead><tbody><tr v-for="order in visibleOrders" :key="order.id"><th scope="row" class="order-number">{{ order.number }}</th><td class="order-created"><time :datetime="new Date(order.createdAt).toISOString()" :title="new Date(order.createdAt).toLocaleString()"><span>{{ new Date(order.createdAt).toLocaleDateString([],{month:'short',day:'numeric'}) }}</span><span>{{ new Date(order.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) }}</span></time></td><td><span class="pill" :class="{ready:order.status==='Ready',served:order.status==='Served'||order.status==='Delivered'}">{{ orderStatusLabels[order.status] }}</span></td><td class="order-next-step"><button v-if="order.status!=='Delivered'" type="button" class="btn small" :class="{green:order.status==='Preparing',secondary:order.status==='Ready'}" :aria-label="`Mark ${order.number} ${orderStatusLabels[orderNextStatus[order.status]!].toLowerCase()}`" :disabled="updatingId!==null" @click="update(order)">{{ updatingId===order.id?'Updating…':order.status==='Preparing'?'Mark ready':order.status==='Ready'?'Send out':'Mark delivered' }}</button><span v-else class="order-dispatched"><StoreGlyph name="check"/>Delivered</span></td></tr></tbody></table>
+                <table v-if="visibleOrders.length" class="order-table"><caption class="visually-hidden">{{ orderStatusLabels[orderFilter] }} orders, newest first</caption><thead><tr><th scope="col">Order</th><th scope="col">Created</th><th scope="col">Status</th><th scope="col">Next step</th></tr></thead><tbody><tr v-for="order in visibleOrders" :key="order.id"><th scope="row" class="order-number"><span>{{ order.number }}</span><small v-if="order.name" class="order-customer-name">{{ order.name }}</small></th><td class="order-created"><time :datetime="new Date(order.createdAt).toISOString()" :title="new Date(order.createdAt).toLocaleString()"><span>{{ new Date(order.createdAt).toLocaleDateString([],{month:'short',day:'numeric'}) }}</span><span>{{ new Date(order.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) }}</span></time></td><td><span class="pill" :class="{ready:order.status==='Ready',served:order.status==='Served'||order.status==='Delivered'}">{{ orderStatusLabels[order.status] }}</span></td><td class="order-next-step"><button v-if="order.status!=='Delivered'" type="button" class="btn small" :class="{green:order.status==='Preparing',secondary:order.status==='Ready'}" :aria-label="`Mark ${order.number} ${orderStatusLabels[orderNextStatus[order.status]!].toLowerCase()}`" :disabled="updatingId!==null" @click="update(order)">{{ updatingId===order.id?'Updating…':order.status==='Preparing'?'Mark ready':order.status==='Ready'?'Send out':'Mark delivered' }}</button><span v-else class="order-dispatched"><StoreGlyph name="check"/>Delivered</span></td></tr></tbody></table>
                 <div v-else class="queue-empty"><StoreGlyph name="orders"/><strong>{{ orders.length===0?'Your order queue is ready.':`No ${orderStatusLabels[orderFilter].toLowerCase()} orders.` }}</strong><p>{{ orders.length===0?'Create an order above to get started.':'Choose another status to view its orders.' }}</p></div>
               </div>
             </section>
@@ -118,6 +122,16 @@ async function onDataReset(options:string[]){
             <details class="card moderation-panel"><summary>Community Moderation<span>Manage visitors</span></summary><div class="moderation-content"><div class="moderation-toggle"><span>Public chat: <strong>{{ room.chatEnabled?'Enabled':'Disabled' }}</strong></span><button type="button" class="btn small secondary" @click="moderate('toggle_chat',undefined,!room.chatEnabled)">{{ room.chatEnabled?'Disable':'Enable' }}</button></div><button type="button" class="btn small secondary" :disabled="refreshing" @click="reload">Refresh visitors</button><p v-if="room.members.length===0" class="help-text">Nobody is online.</p><div v-for="visitor in room.members" :key="visitor.id" class="moderation-member"><strong>{{ visitor.nickname }}</strong><div><button type="button" class="btn small secondary" @click="moderate('mute',visitor.id)">{{ visitor.muted?'Unmute':'Mute' }}</button><button type="button" class="btn small secondary" @click="moderate('kick',visitor.id)">Kick</button></div></div><p class="privacy">Mute and kick controls are temporary and reset on restart.</p></div></details>
           </aside>
         </div>
+        <dialog ref="createOrderDialog" class="delivery-confirmation create-order-modal" aria-labelledby="create-order-heading" @close="orderName='';createOrderError=''" @cancel="busy&&$event.preventDefault()">
+          <form @submit.prevent="createOrder">
+            <h2 id="create-order-heading">Create order</h2>
+            <p>We’ll assign the next order number automatically. A name added here appears on the public live orders board.</p>
+            <label for="create-order-name" class="label">Name <span>(optional)</span></label>
+            <input id="create-order-name" v-model="orderName" class="input" type="text" maxlength="60" autocomplete="off" placeholder="Customer name" autofocus :disabled="busy">
+            <p v-if="createOrderError" class="error" role="alert">{{ createOrderError }}</p>
+            <div class="delivery-confirmation-actions"><button type="button" class="btn secondary" :disabled="busy" @click="createOrderDialog?.close()">Cancel</button><button type="submit" class="btn" :disabled="busy">{{ busy?'Creating…':'Create order' }}</button></div>
+          </form>
+        </dialog>
         <dialog ref="closeStoreConfirmation" class="delivery-confirmation" aria-labelledby="close-store-heading" aria-describedby="close-store-description" @cancel="storeActionBusy&&$event.preventDefault()">
           <h2 id="close-store-heading">Close the store?</h2>
           <p id="close-store-description">New visitors will not be able to enter. {{ room.members.length ? `The ${room.members.length} visitor${room.members.length===1?'':'s'} currently inside will be disconnected.`:'Anyone already inside will be disconnected.' }} You can reopen the store anytime.</p>

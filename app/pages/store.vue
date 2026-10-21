@@ -10,7 +10,7 @@ const featureConfig=useRuntimeConfig().public
 const catEnabled=computed(()=>String(featureConfig.storeCatEnabled)!=='false'&&route.query.cat!=='0')
 const guideEnabled=computed(()=>String(featureConfig.storeGuideEnabled)!=='false'&&route.query.guide!=='0')
 type Status = OrderStatus
-type PublicOrder = { id:number; number:string; status:Status }
+type PublicOrder = { id:number; number:string; name:string|null; status:Status }
 type MenuState = { date:string; version:string; items:{id:number;name:string;priceCentavos:number}[] }
 type Me = { nickname:string; avatar:string }
 const me=ref<Me|null>(null), board=ref<PublicOrder[]>([]), players=ref<Player[]>([]), selfId=ref('')
@@ -238,8 +238,8 @@ async function leave(){
           <button type="button" class="btn small secondary dialog-action" :disabled="menuLoading" @click="loadMenu(true)">Refresh menu</button>
         </template>
         <template v-if="overlay==='board'">
-          <section class="order-status-group" v-for="status in statusOptions" :key="status" :aria-label="`${orderStatusLabels[status]} orders`"><div class="order-status-heading"><strong>{{ orderStatusLabels[status] }}</strong><span>{{ board.filter(o=>o.status===status).length }}</span></div><div class="order-chips"><span v-for="o in board.filter(b=>b.status===status)" :key="o.id" class="pill" :class="{ready:status==='Ready',served:status==='Served'||status==='Delivered'}">{{ o.number }}</span><small v-if="!board.some(o=>o.status===status)" class="muted">No orders</small></div></section>
-          <p class="privacy">Only order numbers and statuses are public. If you have questions about your order, contact the store through Messenger.</p>
+          <section class="order-status-group" v-for="status in statusOptions" :key="status" :aria-label="`${orderStatusLabels[status]} orders`"><div class="order-status-heading"><strong>{{ orderStatusLabels[status] }}</strong><span>{{ board.filter(o=>o.status===status).length }}</span></div><div class="order-chips"><span v-for="o in board.filter(b=>b.status===status)" :key="o.id" class="pill" :class="{ready:status==='Ready',served:status==='Served'||status==='Delivered'}"><strong>{{ o.number }}</strong><small v-if="o.name">{{ o.name }}</small></span><small v-if="!board.some(o=>o.status===status)" class="muted">No orders</small></div></section>
+          <p class="privacy">Order numbers and names added by staff are visible to everyone here. If you have questions about your order, contact the store through Messenger.</p>
           <button class="btn small secondary dialog-action" @click="loadBoard">Refresh board</button>
         </template>
         <template v-else-if="overlay==='cashier'"><p>🍮 {{ headerTime }} Welcome to Chits Store, {{ me.nickname }}!</p><p>{{ preparing }} order(s) preparing · {{ ready }} ready. You can check the live board anytime.</p><button class="btn small dialog-action" @click="overlay='board'">View orders</button><p class="help-text">Tap anywhere on the floor or use the joystick to move. Tap the chef or order board to interact.</p></template>

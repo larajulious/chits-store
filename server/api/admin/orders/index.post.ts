@@ -6,7 +6,10 @@ import { requireAdmin, verifyOrigin } from '../../../utils/auth'
 import { notifyOrderChanged } from '../../../utils/room'
 export default defineEventHandler(async event => {
   requireAdmin(event); verifyOrigin(event)
-  await readJsonBody<Record<string,unknown>>(event)
+  const body=await readJsonBody<Record<string,unknown>>(event)
+  if(body.name!==undefined&&typeof body.name!=='string')throw createError({statusCode:400,statusMessage:'Order name must be text'})
+  const name=typeof body.name==='string'?body.name.trim():''
+  if(name.length>60||/[\u0000-\u001f\u007f-\u009f]/u.test(name))throw createError({statusCode:400,statusMessage:'Enter a name of up to 60 characters on one line'})
   // The token_hash column is kept only for backward compatibility with v0.1 databases.
   // It is not used for public entry and is never returned to clients.
   const legacyUnusedToken = randomBytes(32).toString('hex')
@@ -19,7 +22,7 @@ export default defineEventHandler(async event => {
       const exists=connection.prepare('SELECT 1 FROM orders WHERE order_number=?')
       while(Number.isSafeInteger(next)&&exists.get(String(next)))next++
       if(!Number.isSafeInteger(next)||next>=Number.MAX_SAFE_INTEGER)throw createError({statusCode:503,statusMessage:'Order numbering limit reached'})
-      const result=connection.prepare('INSERT INTO orders(order_number,token_hash,created_at,updated_at) VALUES(?,?,?,?)').run(String(next),legacyUnusedToken,now,now)
+      const result=connection.prepare('INSERT INTO orders(order_number,token_hash,nickname,created_at,updated_at) VALUES(?,?,?,?,?)').run(String(next),legacyUnusedToken,name||null,now,now)
       connection.prepare('INSERT INTO order_sequence(id,next_number) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET next_number=excluded.next_number').run(next+1)
       return connection.prepare('SELECT * FROM orders WHERE id=?').get(result.lastInsertRowid) as OrderRow
     }).immediate()

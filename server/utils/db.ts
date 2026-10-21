@@ -100,4 +100,4 @@ export function db() {
 export const getOrder = (id: number) => db().prepare('SELECT * FROM orders WHERE id = ?').get(id) as OrderRow | undefined
 export const getVisitor = (id: number) => db().prepare('SELECT * FROM visitors WHERE id = ?').get(id) as VisitorRow | undefined
 export const activeVisitor = (visitor: VisitorRow | undefined) => Boolean(visitor && !visitor.revoked_at && Date.now() - visitor.last_seen_at < 7 * 24 * 60 * 60_000)
-export const publicOrder = (row: OrderRow) => ({ id: row.id, number: row.order_number, status:row.status==='Served'&&row.delivered_at!=null?'Delivered' as const:row.status })
+export const publicOrder = (row: OrderRow) => ({ id: row.id, number: row.order_number, name:row.nickname, status:row.status==='Served'&&row.delivered_at!=null?'Delivered' as const:row.status })

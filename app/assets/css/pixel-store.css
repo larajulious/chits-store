@@ -37,7 +37,7 @@
 .game-shell .store-dialog .privacy{font-family:'Courier New',monospace;font-size:11px;color:#7f684f;line-height:1.6}
 .order-status-group{border:2px solid #c7a576;border-radius:0;background:#f2e4c9;box-shadow:inset 2px 2px 0 #fffae9}
 .order-status-heading{font-size:11px;color:#674731}.order-status-heading>span{border:1px solid #b08a5e;border-radius:0;background:#e3cca3;font-family:'Courier New',monospace}
-.game-shell .order-chips .pill{font-family:'Courier New',monospace;font-size:12px;border-radius:0;padding:6px 8px}
+.game-shell .order-chips .pill{display:inline-flex;flex-direction:column;align-items:flex-start;gap:2px;font-family:'Courier New',monospace;font-size:12px;border-radius:0;padding:6px 8px}.game-shell .order-chips .pill strong{font-weight:800}.game-shell .order-chips .pill small{font-size:11px;line-height:1.35}
 .game-shell .store-dialog .reaction-choice{font-size:9px;border-radius:0;min-height:88px;gap:12px}.reaction-symbol{width:32px;height:32px;image-rendering:pixelated;flex-shrink:0}
 .game-shell :deep(.game-joystick){border-radius:0;border:3px solid #805a3e;background:#f9e7bba8;box-shadow:3px 3px 0 #67473166}.game-shell :deep(.joystick-knob){border-radius:0;border-width:3px}
 .game-shell button:focus-visible,.game-shell a:focus-visible,.game-shell input:focus-visible{outline:3px solid #617e4d;outline-offset:4px}

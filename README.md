@@ -13,7 +13,7 @@ A cozy multiplayer bakery prototype, built in one **Nuxt + Phaser + SQLite** pro
 - Miming, the resident shop cat, roams and rests independently in each visitor's browser. Visitors can drag or toss their own yarn ball and pet their own cat when nearby; see [performance audit and device checklist](docs/RESIDENT_CAT_PERFORMANCE.md).
 - A browser session represents one public visitor; returning visitors can choose a different avatar.
 - WebSocket multiplayer and chat now authenticate public visitor sessions, not orders.
-- Public order board shows **only order numbers and Preparing/Ready/Out for Delivery/Delivered statuses**. The in-game Live Orders board spells out **Preparing** and lists up to five most recent Out for Delivery orders; the Orders panel keeps the full public feed. Orders remain active through Out for Delivery; Delivered orders remain on the public board for five minutes and in admin history.
+- Public order board shows **order numbers, staff-entered names when available, and Preparing/Ready/Out for Delivery/Delivered statuses**. The in-game Live Orders board spells out **Preparing** and lists up to five most recent Out for Delivery orders; long names are shortened there, while the Orders panel shows full names. Orders remain active through Out for Delivery; Delivered orders remain on the public board for five minutes and in admin history.
 - Removed **My Order**, personal Ready notices, and automatic ejection when an order goes out for delivery, because public visitors are not linked to a particular order.
 - Admin still logs in, creates orders, and advances statuses. Create order assigns numbers automatically: **100, 101, 102…**. The SQLite counter survives restarts and skips numbers already in use; existing orders keep their numbers. No customer links are generated.
 - Staff have optional Community Moderation controls: disable chat, temporary mute and kick.
@@ -127,7 +127,7 @@ If entry still fails, identify the error in those logs before changing configura
 - Use Nginx with HTTPS and `proxy_set_header Upgrade` for `wss://`. Limit public firewall ports and run Node as an unprivileged account.
 - Set `PUBLIC_ORIGIN` to the exact HTTPS origin in production. Leave it unset for local LAN testing. Enable `TRUST_PROXY=1` only with Node bound to loopback behind the supplied Nginx proxy, which overwrites `X-Real-IP` for login/join rate limits.
 - Back up SQLite using SQLite's online backup mechanism or `.backup` to include WAL changes. Do not copy only the database file while writing.
-- The public board deliberately includes order numbers. Never use order numbers containing names or personal identifiers.
+- The public board deliberately includes order numbers and any names staff enter when creating orders. Use a name only when it is appropriate to display to every visitor.
 - Admin password and session signing secret are only in `.env`. Do not commit it.
 
 ## Changes intentionally deferred

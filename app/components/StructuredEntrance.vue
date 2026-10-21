@@ -17,7 +17,18 @@ const selected=computed(()=>avatarOptions.find(option=>option.id===props.avatar)
         <h1 v-else id="welcome-heading">See you<br><em>again soon.</em></h1>
         <p class="welcome-copy">{{ statusReady&&!storeOpen?'Chits Meryenda Hub is closed right now. Come back when we open the doors again.':'A cozy place to hang out, meet other visitors, and follow what’s cooking.' }}</p>
         <div class="bakery-scene" :class="{'scene-closed':statusReady&&!storeOpen}" aria-hidden="true">
-          <div class="welcome-store"><div class="store-roof"/><div class="store-chimney"><span class="store-steam steam-one"/><span class="store-steam steam-two"/></div><div class="store-window left"/><div class="store-window right"/><div class="store-sign">✦ CHITS STORE ✦</div><div class="store-door"/><div v-if="statusReady&&!storeOpen" class="store-sleep"><span>Z</span><span>Z</span><span>Z</span></div></div>
+          <div class="welcome-store">
+            <div class="store-roof"/>
+            <div class="store-chimney"><span class="store-steam steam-one"/><span class="store-steam steam-two"/></div>
+            <div class="store-window left"/><div class="store-window right"/>
+            <div class="store-sign">✦ CHITS STORE ✦</div><div class="store-door"/>
+            <div v-if="statusReady&&storeOpen" class="store-visitors">
+              <div class="store-visitor visitor-left"><AvatarIcon avatar="mochi"/><span class="visitor-apron"/><span class="visitor-feet"/></div>
+              <div class="store-visitor visitor-right"><AvatarIcon avatar="biko"/><span class="visitor-apron"/><span class="visitor-feet"/></div>
+            </div>
+            <div v-if="statusReady&&!storeOpen" class="store-closed-placard"><span>CLOSED</span></div>
+            <div v-if="statusReady&&!storeOpen" class="store-sleep"><span>Z</span><span>Z</span><span>Z</span></div>
+          </div>
           <span class="scene-caption">A small store with room for you.</span>
         </div>
         <ul class="visit-features"><li><StoreGlyph name="door"/>Explore the bakery</li><li><StoreGlyph name="people"/>Meet other visitors</li><li><StoreGlyph name="orders"/>Check live orders</li></ul>

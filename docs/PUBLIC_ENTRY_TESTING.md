@@ -2,6 +2,137 @@
 
 Anyone may choose an avatar and enter. Visitor sessions are independent of orders. There are no invitation requirements, personal order ownership, or Served-based visitor ejections. Admin authentication remains required for order changes and room moderation.
 
+## Welcome-page store animation
+
+The existing pixel storefront on `/` now has a small chimney with rising puffs, warm window flicker, a softly pulsing sign, and a door that opens occasionally. When closed, its door stays shut and darkens, the windows dim and slowly pulse like sleepy eyes, and small pixel “Z”s drift above the roof. These are CSS-only visual effects and do not change the entrance form or navigation. `prefers-reduced-motion: reduce` stops all motion while keeping the sleeping cues visible.
+
+Files changed: `app/components/StructuredEntrance.vue`, `app/assets/css/pixel-entrance.css`, `README.md`, and this document. Typecheck, production build, all 39 tests, and `git diff --check` passed. Isolated browser checks at 390×844 and 1440×900 confirmed the open-store door and steam animated. In the closed state, the “Z”s moved and windows pulsed while the door stayed still; the entry button remained disabled. Reduced-motion checks showed static “Z”s, windows, and door. Reopening removed the “Z”s and restored the door animation. There were no page errors or horizontal overflows. Screenshots: `chits-home-sleep-mobile.png`, `chits-home-sleep-desktop.png`, and `chits-home-sleep-reduced.png` in the session visualization directory. Physical-device and VPS animation remain unverified.
+
+## In-store board and character size
+
+The in-game Live Orders board now spells out **PREPARING**. Visitor avatars and the walking menu guide render at 1.15×, and the chef and cashier at 1.25×. Floating names sit a little higher; the menu guide enters to the side of the visitor so the larger sprites and labels do not overlap at the doorway. Character coordinates, hit targets, collisions, and network movement remain unchanged. The board still shows up to five Out for Delivery numbers.
+
+Files changed: `game/createGame.ts`, `README.md`, and this document. Typecheck and production build passed. Isolated browser screenshots at 390×844 and 1200×900 showed the full board label and larger characters with no page errors or horizontal overflow. Screenshots: `chits-characters-mobile.png` and `chits-characters-desktop.png` in the session visualization directory. Physical-device and VPS rendering remain unverified.
+
+## Selective admin data reset
+
+**Reset data** in the admin header opens a pixel-styled dialog with five independent choices: today's menu items, all orders and their number counter, all feedback, current in-memory chat, and visitor sessions. The confirmation requires selecting at least one choice and typing `RESET`; it does not ask for the password again. The server requires an admin session and same-origin request, validates the exact choice list, and deletes selected SQLite records in a transaction. Resetting orders makes the next order number 100; resetting visitors disconnects them and preserves SQLite's visitor ID counter so old signed cookies cannot attach to new visitors. The store's open/closed setting, admin credentials, other unselected categories, and menu records from earlier dates remain intact. Connected store clients refresh cleared menus, order boards, feedback, or chat as applicable.
+
+Files changed: `app/components/AdminResetData.vue`, `app/components/AdminChat.vue`, `app/components/AdminFeedback.vue`, `app/pages/admin/index.vue`, `app/pages/store.vue`, `server/api/admin/reset.post.ts`, `server/utils/room.ts`, `tests/admin-reset.test.mjs`, `package.json`, `README.md`, and this document. `npm run typecheck`, `npm run build`, `npm test` (39 passing tests), and `git diff --check` passed. An isolated built-server browser check covered the dialog and confirmation at 1440×900, 390×844, and 320×640, successful reset and subsequent order 100, Escape close, no page errors, and no horizontal overflow. After removing password re-entry, the rebuilt 390×844 dialog was checked again: no password field, successful reset using only `RESET`, no page errors, and no horizontal overflow. The current screenshot is `chits-reset-mobile.png` in the session visualization directory. Production data and credentials were not touched; live VPS and physical-device behavior remain unverified.
+
+## Chef cooking at the stove
+
+The chef now wears a clearer pixel hat and apron and stirs a visible pan at the kitchen stove. Food pieces shift, the pan bobs and steam rises in a short repeating loop. A static pan, utensil and steam remain visible for visitors who prefer reduced motion. The chef's interaction text now matches the ongoing cooking scene, including when no orders are preparing. This is client-side decorative animation; order status and multiplayer positions are unchanged.
+
+Files changed: `game/createGame.ts`, `app/pages/store.vue`, `README.md`, and this document. Validation: `npm run typecheck`, `npm run build`, `npm test` (38 passing tests), and `git diff --check` passed. In an isolated built browser fixture at 390×844, four samples of the stove area produced four distinct normal-motion frames and one identical reduced-motion frame; there were no page errors. Screenshots: `chits-chef-no-preference.png` and `chits-chef-reduce.png` in the session visualization directory. Physical-device rendering and the deployed VPS remain unverified.
+
+## Admin header controls
+
+The admin header places **Close store / Open store**, **Today's menu**, **Reset data**, and **Log out** together. Today's menu opens a keyboard-accessible native dialog for item and price management; the editor no longer occupies the order column. The open/close button replaces the separate availability strip and retains its existing close confirmation and reopen behavior. At mobile widths, the header actions wrap into compact rows. The order queue now uses the freed dashboard space.
+
+Files changed for this layout: `app/pages/admin/index.vue`, `app/components/AdminDailyMenu.vue`, `app/assets/css/admin-dashboard.css`, `app/assets/css/admin-pixel.css`, `README.md`, and this document. `npm run typecheck`, `npm run build` and `npm test` passed (38 tests), as did `git diff --check`. An isolated built-server browser check at 1440×900, 390×844 and 320×844 confirmed the header layout, menu-dialog focus and Escape close, add/edit/remove, close-store confirmation and cancel, successful close and reopen, no horizontal overflow and no page errors. Screenshots: `chits-admin-header-desktop.png`, `chits-admin-header-mobile.png`, `chits-admin-menu-dialog-desktop.png`, and `chits-admin-menu-dialog-mobile.png` in the session visualization directory. VPS and physical-device behavior remain unverified. Existing credentials and production data were left untouched.
+
+## Today's menu and roaming guide
+
+The staff dashboard has a pixel-styled **Today's menu** editor, now opened from the header dialog. Staff can add, rename, reprice and remove items. Prices are stored as integer centavos, and the server assigns the current `Asia/Manila` date; a new empty menu starts each local day. Older menu records remain in SQLite. Each day's list is limited to 30 items. Staff writes require an admin session, same-origin request and bounded JSON input. The public endpoint returns only the date, item names and prices, with no cached response. Connected visitors viewing the menu refresh when staff change it.
+
+A small menu-guide mascot enters from the store doorway, follows walkable paths around the tables, pauses between stops and opens the pixel menu dialog when tapped. The Menu action below the game provides the same view for keyboard and touch users. The guide's optional roaming and sprite animation stop when reduced motion is requested. The NPC is a local scene character; its route is not synchronized across visitor devices and it does not join the WebSocket presence list.
+
+Files modified for this feature: `server/utils/db.ts` (additive menu table), `server/utils/menu.ts` (date, validation and public shape), `server/api/menu/today.get.ts` (public read), `server/api/admin/menu/today.get.ts`, `server/api/admin/menu/today.post.ts`, `server/api/admin/menu/today.patch.ts`, `server/api/admin/menu/today.delete.ts` (staff management), `app/components/AdminDailyMenu.vue` (editor), `app/pages/admin/index.vue` (dashboard placement), `game/createGame.ts` (guide art, walking and tap hit area), `app/pages/store.vue` (live menu dialog and action), `app/components/StoreGlyph.vue` (menu icon), `tests/daily-menu.test.mjs` (isolated API/persistence/WebSocket checks), `package.json` (test command), `README.md` and this document.
+
+Validation actually run: `npm run typecheck`, `npm run build`, and `npm test` passed with **38 tests**, zero failures. The isolated menu test covered authorization, forged origins, malformed and oversized input, exact price storage, public response, live WebSocket notification, restart persistence and date isolation. Separate temporary built server/browser fixtures covered staff add/edit/remove at 1440×900, visitor menu and guide tap at 390×844, live removal while the visitor dialog was open, compact queue visibility, and expanded mobile admin layout. A 320×568 check confirmed the six store actions fit without horizontal page overflow and the menu dialog opens. Browser page errors were empty. Screenshots in the session visualization directory: `chits-daily-menu-admin-compact.png`, `chits-daily-menu-admin.png`, `chits-daily-menu-mobile.png`, `chits-daily-menu-admin-mobile.png`, `chits-menu-guide-mobile.png`, and `chits-daily-menu-narrow.png`. Actual Manila midnight rollover, physical touch devices, and the deployed VPS remain unverified. Existing `.env`, `.data`, credentials and production records were not changed.
+
+## Automatic return to the welcome screen
+
+When an active visit is replaced by another tab, closed by staff, kicked, full, expired, or otherwise loses its valid visitor session, the store now navigates directly to `/` and replaces the history entry. The intermediate **Store entrance** error card and its manual link are gone. The redirect stops reconnect timers, closes the old socket and prevents a second redirect. A direct `/store` visit without a valid session also returns home. The explicit Leave button still uses its confirmation and thank-you dialog.
+
+Modified files: `app/pages/store.vue`, `README.md`, and this document. Validation: `npm run typecheck` and `npm run build` passed. In an isolated built browser session at 390×844, a direct `/store` visit without a session returned to `/`; opening Maja #001 in a second tab returned the original tab to `/` while the new tab stayed connected; closing the store returned the remaining tab to the closed welcome screen with entry disabled. Screenshot: `chits-auto-home-replaced-mobile.jpg` in the session visualization directory. No automated test was added or full integration suite rerun for this client navigation change; the 37-test result below covers the server events that trigger it. Physical-device and VPS behavior remain unverified.
+
+## Staff-controlled store availability
+
+The staff dashboard has a visible Open / Close store control. Closing requires confirmation, blocks new visitor joins and WebSocket entry, returns connected visitors to the closed welcome screen, and disables staff chat sends and visitor feedback submissions while closed. Existing order management remains available. The public welcome screen shows the closed state and disables entry; it checks status every 15 seconds and after a failed attempt. Reopening restores public entry. The state is stored in an additive `store_settings` SQLite table, defaults to open for existing installations and survives restarts. Existing orders, visitor records, `.env`, `.data`, and admin credentials are preserved.
+
+Files modified:
+
+| File | Change |
+| --- | --- |
+| `server/utils/db.ts` | Add persistent store availability setting without changing existing tables. |
+| `server/utils/store.ts` | Read, enforce and update availability. |
+| `server/utils/room.ts` | Notify and disconnect live visitors on close. |
+| `server/api/store/status.get.ts` | Public, uncached status for the welcome screen. |
+| `server/api/admin/store/status.post.ts` | Staff-only, same-origin, bounded JSON state update. |
+| `server/api/visitors/join.post.ts` | Block visitor joins while closed. |
+| `server/api/me/index.get.ts` | Block direct store re-entry while closed. |
+| `server/routes/ws.ts` | Block closed-store WebSocket entry and in-flight messages. |
+| `server/api/feedback/index.post.ts` | Block submissions while closed. |
+| `server/api/admin/chat.post.ts` | Block staff sends while closed. |
+| `app/pages/admin/index.vue` | Status control and closing confirmation. |
+| `app/components/AdminChat.vue` | Disable the staff composer while closed. |
+| `app/assets/css/admin-pixel.css` | Pixel style for the admin status control. |
+| `app/pages/index.vue` | Poll status and handle closed entry. |
+| `app/components/StructuredEntrance.vue` | Show closed welcome and disabled entry. |
+| `app/assets/css/pixel-entrance.css` | Style closed state. |
+| `app/pages/store.vue` | Return current and direct visitors to the closed welcome screen. |
+| `tests/store-availability.test.mjs` | Legacy migration, authorization, active sockets, closed gates and restart/reopen coverage. |
+| `package.json` | Include availability integration suite. |
+| `README.md` | Document staff control and manual acceptance steps. |
+| `docs/PUBLIC_ENTRY_TESTING.md` | Record behavior and validation. |
+
+Validation: final `npm run typecheck`, `npm run build` and `npm test` passed, with **37 reported tests** and zero failures. The new isolated suite starts from a legacy SQLite order table, checks default open, rejects unauthorized/forged/invalid changes, confirms two WebSocket visitors receive `store_closed` and disconnect, blocks joins, direct sessions, socket upgrades, feedback and staff chat while closed, then verifies persisted closure after restart and successful reopening. Browser checks on a separate temporary database covered staff login, an active customer, cancelling a close, confirming a close, the visitor thank-you screen, closed welcome and disabled entry, reopening, and the admin control at 390×844. Screenshots: `chits-store-closed-admin.jpg`, `chits-store-closed-welcome.jpg`, and `chits-store-toggle-mobile.jpg` in the session visualization directory. The browser review used page reload to check reopening; the 15-second passive status refresh was source-checked but not timed in the browser. The real VPS and physical devices remain unverified.
+
+## Pixel-styled admin dashboard
+
+The staff login and dashboard now use the store's local Silkscreen font, warm paper palette, subtle pixel grid, square borders, inset edges and offset shadows. Order counts, queue tabs and rows, chat, feedback moderation, room controls, buttons, inputs and the delivery confirmation share that treatment. Body copy remains in Courier for readability. Desktop and mobile keep the existing dashboard structure and actions.
+
+Modified files: `app/assets/css/admin-pixel.css` (new scoped visual layer), `app/pages/admin/index.vue` (include it), `app/components/AdminChat.vue`, `app/components/AdminFeedback.vue`, and this document. No runtime dependencies, credentials or database code changed.
+
+Validation: `npm run typecheck` and `npm run build` passed. An isolated built server with temporary SQLite data and test credentials was used to inspect login and the dashboard at 1440×900 and 390×844. In the browser, the queue button created orders 100 and 101, order 100 advanced to Ready and Out for Delivery, filters showed the expected records, feedback moderation expanded, and the mobile delivery confirmation opened with Cancel focused. Screenshots: `chits-admin-pixel-desktop.jpg`, `chits-admin-pixel-mobile.jpg`, and `chits-admin-pixel-delivery-mobile.jpg` in the session visualization directory. The full integration suite was not rerun for this visual change; the most recent 33-test result is recorded below. Physical-device and VPS appearance remain unverified.
+
+## Create directly from the order queue
+
+Moved **+ Create order** into the Order queue header and removed the separate Create new order card, number placeholder and explanatory block. The queue uses the reclaimed desktop space. The header wraps on narrow screens; the existing creation handler, busy state, automatic numbering, status filters and success/error feedback are preserved. The update time now sits beneath the queue caption on desktop. Removed CSS used only by the deleted card.
+
+Modified files: `app/pages/admin/index.vue`, `app/assets/css/admin-dashboard.css`, and this document. Validation: `npm run typecheck` and `npm run build` passed. On an isolated temporary database, staff login and the relocated button created order 100 at 1440×900 and order 101 at 390×844. Creating from the Delivered filter returned to Preparing. Visual checks confirmed the removed card, header action and expanded queue. Screenshots: `chits-queue-header-desktop.jpg` and `chits-queue-header-mobile.jpg` in the session visualization directory. Test tabs/server/database were removed afterward. No new automated tests were added or full integration suite rerun for this UI relocation; the preceding numbering pass has the 33-test result below. VPS and physical-device checks remain pending.
+
+## Automatic order numbering
+
+Create order now assigns **100, 101, 102…** on the server. Staff do not enter a number. Successful creation shows the assigned number and returns the queue to Preparing. The server ignores caller-supplied number overrides. Existing orders retain their labels, and any number already in use is skipped. The sequence continues across restarts and does not reset each day or reuse an automatically issued number after deletion.
+
+An additive `order_sequence` table stores the next candidate in the existing SQLite file. An immediate transaction allocates the number, inserts the order and advances the counter together. A failed insert rolls back allocation; concurrent creates cannot share a number. Authentication, origin checks, bounded JSON validation and public-order broadcasts remain in place. No credentials, existing orders or production data were reset; no dependencies or paid services were added.
+
+Files modified for automatic numbering and the keyboard fix in this development pass:
+
+| File | Change |
+| --- | --- |
+| `server/utils/db.ts` | Add the persistent sequence table. |
+| `server/api/admin/orders/index.post.ts` | Assign numbers atomically from 100 and skip occupied labels. |
+| `app/pages/admin/index.vue` | Replace manual entry with automatic assignment and use the returned number in confirmation. |
+| `app/assets/css/admin-dashboard.css` | Style the automatic-number display within the existing responsive form. |
+| `tests/order-numbering.test.mjs` | New isolated integration coverage for allocation, authorization, concurrency, rollback and restart. |
+| `tests/public-foundation.test.mjs` | Create orders without a supplied number and assert the first assigned number. |
+| `package.json` | Include the numbering suite in `npm test`. |
+| `game/createGame.ts` | Stop movement-key capture from consuming native typing and suspend controls during input. |
+| `app/components/GameCanvas.client.vue` | Pass and watch the controls-enabled state; clear joystick input. |
+| `app/pages/store.vue` | Suspend game controls while store panels are open or leaving. |
+| `README.md` | Document automatic numbering and update the manual test instructions. |
+| `docs/PUBLIC_ENTRY_TESTING.md` | Record changes, executed checks and acceptance limits. |
+
+Validation: `npm run typecheck`, `npm run build` and `npm test` passed, with **33 reported tests**, zero failures and zero skips. The new numbering suite starts with an isolated legacy CHECK-constrained database containing order 101: creation assigns 100 then 102, twelve concurrent creates assign 103–114, a forced insert failure preserves the counter, retry assigns 115, and restart/deletion checks continue through 117. It also rejects anonymous/visitor requests, forged origins and invalid/oversized bodies without allocating numbers, ignores caller overrides and preserves the legacy record. Existing multiplayer, chat, status, feedback and production-start suites pass.
+
+Browser checks used a separate temporary database and test credentials. At 1440×900, staff login succeeded and two admin tabs created 100, 101 and 102 without manual entry. Creating while the Delivered filter was selected returned to Preparing. At 390×844, the stacked form created 103 successfully. Screenshots: `chits-auto-order-desktop.jpg` and `chits-auto-order-mobile.jpg` in the session visualization directory. Test tabs/server/database were removed afterward. The existing dev server and real `.env`/`.data` were left in place.
+
+VPS deployment, physical-device interaction, mobile soft keyboards and IME composition remain unverified. The UI still shows the latest 100 orders; the allocation counter considers all existing labels, not only those shown in that list. The numbering sequence is global and persistent, not a daily reset.
+
+## Keyboard entry in chat and feedback
+
+Reproduced the reported failure with real browser key presses: typing `palitaw` into chat produced `plit`. Phaser's default `addKeys` capture called `preventDefault` for W/A/S/D and arrows at the window level. The existing update-loop input guard stopped avatar movement but could not restore cancelled native typing.
+
+Movement keys are now registered without global browser-event capture. Arrow scrolling is prevented only when the game is accepting movement input. Game controls pause while a store panel is open; held-key state, joystick direction and pending walk paths are cleared on pause/resume. Focused inputs, textareas, selects, contenteditable elements, textbox roles, composition and native dialogs also keep movement from consuming typing or continuing underneath the UI. Idle character animation and incoming room updates continue.
+
+Modified files: `game/createGame.ts`, `app/components/GameCanvas.client.vue`, `app/pages/store.vue`, and this document.
+
+Validation: build, type check and all 27 existing tests passed. Isolated browser checks used actual key presses rather than relying on `fill`: chat accepted `palitaw wasd WASD` and `awsdAWSD`, arrow-left insertion/backspace worked, Enter sent the complete chat message, and feedback accepted `palitaw wasd` followed by a newline and `WASD` and submitted successfully. The same lower/uppercase movement letters and multiline editing worked at 390×844. Holding W after closing a panel moved the avatar again. Desktop checks used 1280×900. Screenshots: `chits-chat-keyboard-typing.jpg`, `chits-feedback-keyboard-typing.jpg`, `chits-feedback-keyboard-mobile.jpg`, `chits-keyboard-before-walk.jpg`, and `chits-keyboard-after-walk.jpg` in the session visualization directory. Actual mobile soft keyboards, IME composition and VPS deployment remain unverified.
+
 ## Admin queue without Active
 
 Removed the combined Active filter from the admin queue. The four filters are now Preparing, Ready, Out for Delivery and Delivered. The page defaults to Preparing; creating an order returns to Preparing so the new order appears immediately. Table captions and empty messages use the selected status directly. Summary counts and the existing order-transition handlers remain in place.

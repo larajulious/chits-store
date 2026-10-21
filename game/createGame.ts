@@ -2,19 +2,23 @@ import Phaser from 'phaser'
 import { avatarOptions, type AvatarId } from '../shared/avatars'
 import { reactionOptions } from '../shared/reactions'
 import type {OrderStatus} from '../shared/order-status'
+import {mascotFloorPoint,type MascotSnapshot,type CatMood} from '../shared/store-mascot'
 
 export type Avatar = AvatarId
 export type Player = { id:string;nickname:string;avatar:string;x:number;y:number }
 export type BoardOrder = { id:number;number:string;status:OrderStatus }
-export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void }
-type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;reducedMotion?:boolean;controlsEnabled?:boolean}
+export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;setMascot:(snapshot:MascotSnapshot)=>void;showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void }
+type YarnEvent={type:'yarn_pickup'|'yarn_drag'|'yarn_release';x?:number;y?:number;vx?:number;vy?:number}
+type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onYarn:(event:YarnEvent)=>void;reducedMotion?:boolean;controlsEnabled?:boolean}
 type Character = {sprite:Phaser.GameObjects.Image;avatar:string;phase:number}
 type VisitorCharacter = Character & {label:Phaser.GameObjects.Text;movingUntil:number;bubble?:Phaser.GameObjects.Text|Phaser.GameObjects.Image}
 function characterPhase(id:string){let hash=0;for(const char of id)hash=(hash*31+char.charCodeAt(0))>>>0;return hash%6000}
 const W=360,H=580,CELL=20
+const VISITOR_SCALE=1.15,STAFF_SCALE=1.25,NAME_LABEL_OFFSET=30
 const tables=[new Phaser.Geom.Rectangle(48,328,87,60),new Phaser.Geom.Rectangle(228,365,86,58)]
 const feedbackArea=new Phaser.Geom.Rectangle(282,472,44,40)
 const obstructions=[...tables,feedbackArea]
+const menuGuideStops=[{x:180,y:440},{x:120,y:440},{x:120,y:500},{x:220,y:500},{x:240,y:440},{x:180,y:440},{x:180,y:500}]
 function bounded(x:number,y:number){return Math.max(20,Math.min(340,x))>=20&&x>=20&&x<=340&&y>=260&&y<=542&&!obstructions.some(r=>r.contains(x,y))}
 function closestPoint(x:number,y:number){const a=Math.max(20,Math.min(340,x)),b=Math.max(260,Math.min(542,y));if(bounded(a,b))return {x:a,y:b};return {x:180,y:500}}
 function key(x:number,y:number){return `${x}|${y}`}
@@ -43,6 +47,10 @@ class StoreScene extends Phaser.Scene {
   private self?:VisitorCharacter
   private remotes=new Map<string,VisitorCharacter>()
   private staff:Character[]=[]
+  private menuGuide?:VisitorCharacter
+  private menuGuidePath:Phaser.Math.Vector2[]=[]
+  private menuGuideStop=0
+  private menuGuidePauseUntil=0
   private direction=new Phaser.Math.Vector2(0,0)
   private path:Phaser.Math.Vector2[]=[]
   private afterPath?:()=>void
@@ -55,7 +63,15 @@ class StoreScene extends Phaser.Scene {
   private cashier?:Phaser.GameObjects.Image
   private cashierBubble?:Phaser.GameObjects.Text
   private cashierBubbleTimer?:Phaser.Time.TimerEvent
+  private cookingEffects?:Phaser.GameObjects.Graphics
+  private cookingFrame=-2
   private orderBoardText?:Phaser.GameObjects.Text
+  private catSprite?:Phaser.GameObjects.Image
+  private catLabel?:Phaser.GameObjects.Text
+  private yarnSprite?:Phaser.GameObjects.Image
+  private mascot?:MascotSnapshot
+  private mascotReady=false
+  private draggingYarn?:{pointerId:number;lastX:number;lastY:number;lastAt:number;previousX:number;previousY:number;previousAt:number;sentAt:number}
   constructor(opts:Options){super('Store');this.opts=opts}
   create(){
     this.cameras.main.setBackgroundColor('#c49c6b')
@@ -68,8 +84,13 @@ class StoreScene extends Phaser.Scene {
     for(let i=0;i<12;i++){g.fillStyle(i%2?0x965f45:0xffe9c7);g.fillRect(i*30,28,30,30)}
     // Decorative kitchen on left
     g.fillStyle(0x84604b).fillRect(15,74,152,112);g.fillStyle(0xffe1b2).fillRect(22,80,138,100)
-    g.fillStyle(0x965d41).fillRect(31,111,120,43);g.fillStyle(0x444143).fillRect(58,116,42,29)
-    g.fillStyle(0xffcd81).fillRect(60,121,38,8)
+    g.fillStyle(0x965d41).fillRect(31,111,120,43)
+    g.fillStyle(0x444143).fillRect(58,116,54,29)
+    g.fillStyle(0x766a5e).fillRect(62,120,46,3)
+    g.fillStyle(0xffcd81).fillRect(67,125,33,12)
+    g.fillStyle(0x9a603f).fillRect(119,133,23,12)
+    g.fillStyle(0xf0cd8e).fillRect(122,134,17,8)
+    g.fillStyle(0x80a766).fillRect(125,135,4,3).fillRect(134,139,3,2)
     g.fillStyle(0xc7e1be).fillRect(116,103,23,23)
     // Order board on the right
     g.fillStyle(0x6e4935).fillRoundedRect(184,65,162,132,7)
@@ -98,7 +119,7 @@ class StoreScene extends Phaser.Scene {
     // Original placeholders drawn as simple pixel shapes, not final copyrighted game art.
     for(const [name,body,detail] of [
       ...avatarOptions.map(avatar=>[avatar.id,avatar.body,avatar.detail] as const),
-      ['cashier',0xf5d7aa,0x5a9477],['chef',0xffe6aa,0xa47758],
+      ['cashier',0xf5d7aa,0x5a9477],['chef',0xffe6aa,0xa47758],['menu-guide',0xf3cf82,0x8c6242],
     ] as const){
       const art=this.make.graphics({x:0,y:0})
       if(name==='mochi'){
@@ -147,6 +168,12 @@ class StoreScene extends Phaser.Scene {
         art.fillStyle(detail).fillRoundedRect(1,6,32,25,3);art.fillStyle(body).fillEllipse(17,17,30,26)
         art.fillStyle(0xfff1b9).fillRect(7,6,9,3).fillRect(23,9,5,3)
         art.fillStyle(0xbd8242).fillRect(6,23,3,2).fillRect(23,25,4,2)
+      }else if(name==='menu-guide'){
+        art.fillStyle(detail).fillRoundedRect(2,7,30,25,3)
+        art.fillStyle(body).fillEllipse(17,17,28,26)
+        art.fillStyle(0xfdf1d0).fillRect(5,2,24,5).fillRect(9,0,16,3)
+        art.fillStyle(0x7d9b67).fillRect(7,26,20,5)
+        art.fillStyle(0xfff4d8).fillRect(14,26,6,4)
       }else if(name==='pichi-pichi'){
         art.fillStyle(body).fillCircle(10,13,9).fillCircle(24,13,9).fillCircle(17,24,9)
         art.fillStyle(detail).fillRect(4,9,3,3).fillRect(15,5,3,3).fillRect(27,8,4,3).fillRect(6,20,3,3).fillRect(13,28,3,3).fillRect(25,24,3,3)
@@ -155,7 +182,13 @@ class StoreScene extends Phaser.Scene {
       }
       art.fillStyle(0xe18e8e).fillRect(5,18,5,3).fillRect(24,18,5,3)
       if(!['cashier','chef'].includes(name))art.fillStyle(0x815145).fillRect(15,21,4,2)
-      if(name==='chef'){art.fillStyle(0xfff8e7).fillRect(3,0,28,7);art.fillRect(8,-5,17,6)}
+      if(name==='chef'){
+        art.fillStyle(0xfff8e7).fillRect(5,5,24,6).fillRect(8,1,18,7).fillRect(12,0,10,3)
+        art.fillStyle(0xd8c8b2).fillRect(6,10,22,2)
+        art.fillStyle(0xfff8e7).fillRect(7,25,20,8)
+        art.fillStyle(0xd8c8b2).fillRect(15,26,4,2)
+        art.fillStyle(0x815145).fillRect(15,21,4,2)
+      }
       if(name==='cashier'){art.fillStyle(0x4d7857).fillRect(6,26,22,5)}
       art.fillStyle(0x33251f).fillRect(9,14,3,1).fillRect(22,14,3,1)
       art.generateTexture(`${name}-blink`,34,34)
@@ -169,15 +202,26 @@ class StoreScene extends Phaser.Scene {
       for(const [x,y,width,height,color] of reaction.pixels)art.fillStyle(color).fillRect(4+x*2,4+y*2,width*2,height*2)
       art.generateTexture(`reaction-${reaction.id}`,40,40);art.destroy()
     }
-    const chef=this.add.image(89,164,'chef').setDepth(180).setScale(1.15)
-    const cashier=this.add.image(178,190,'cashier').setDepth(191).setScale(1.15)
+    this.createMascotTextures()
+    const chef=this.add.image(89,164,'chef').setDepth(180).setScale(STAFF_SCALE)
+    this.cookingEffects=this.add.graphics().setDepth(181)
+    this.updateChefCooking()
+    const cashier=this.add.image(178,190,'cashier').setDepth(191).setScale(STAFF_SCALE)
     this.cashier=cashier
     this.staff=[{sprite:chef,avatar:'chef',phase:characterPhase('chef')},{sprite:cashier,avatar:'cashier',phase:characterPhase('cashier')}]
     this.add.text(92,190,'CHEF',{fontFamily:'monospace',fontSize:'10px',color:'#674530'}).setOrigin(.5)
-    this.add.text(177,165,'CASHIER',{fontFamily:'monospace',fontSize:'10px',color:'#674530'}).setOrigin(.5)
-    const sprite=this.add.image(180,510,this.opts.avatar).setDepth(520)
-    const label=this.add.text(180,490,this.opts.nickname,{fontFamily:'monospace',fontSize:'11px',fontStyle:'bold',color:'#38291d',backgroundColor:'#fff7e1',padding:{x:4,y:2}}).setOrigin(.5).setDepth(521)
+    this.add.text(177,160,'CASHIER',{fontFamily:'monospace',fontSize:'10px',color:'#674530'}).setOrigin(.5)
+    // Enter beside the visitor so the larger sprites and name tags stay separate.
+    const guideSprite=this.add.image(this.opts.reducedMotion?180:235,this.opts.reducedMotion?440:535,'menu-guide').setDepth(550).setScale(VISITOR_SCALE)
+    const guideLabel=this.add.text(180,guideSprite.y-NAME_LABEL_OFFSET,'MENU • TAP',{fontFamily:'monospace',fontSize:'9px',fontStyle:'bold',color:'#38291d',backgroundColor:'#fff4d5',padding:{x:4,y:2}}).setOrigin(.5).setDepth(551)
+    this.menuGuide={sprite:guideSprite,label:guideLabel,avatar:'menu-guide',phase:characterPhase('menu-guide'),movingUntil:0}
+    this.menuGuidePauseUntil=this.time.now+1100
+    const sprite=this.add.image(180,510,this.opts.avatar).setDepth(520).setScale(VISITOR_SCALE)
+    const label=this.add.text(180,510-NAME_LABEL_OFFSET,this.opts.nickname,{fontFamily:'monospace',fontSize:'11px',fontStyle:'bold',color:'#38291d',backgroundColor:'#fff7e1',padding:{x:4,y:2}}).setOrigin(.5).setDepth(521)
     this.self={sprite,label,avatar:this.opts.avatar,phase:characterPhase(this.opts.nickname),movingUntil:0}
+    this.catSprite=this.add.image(100,290,'cat-sit').setDepth(300)
+    this.catLabel=this.add.text(100,258,'MIMING',{fontFamily:'monospace',fontSize:'9px',fontStyle:'bold',color:'#513826',backgroundColor:'#fff1d2',padding:{x:3,y:1}}).setOrigin(.5).setDepth(301)
+    this.yarnSprite=this.add.image(175,440,'yarn-ball').setDepth(450)
     if(this.input.keyboard){
       // Global capture prevents native typing even when update() ignores focused inputs.
       this.keys=this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT',false) as Record<string,Phaser.Input.Keyboard.Key>
@@ -190,6 +234,16 @@ class StoreScene extends Phaser.Scene {
     this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>{
       if(this.inputBlocked())return
       const x=pointer.worldX,y=pointer.worldY
+      if(this.yarnSprite&&Math.hypot(x-this.yarnSprite.x,y-this.yarnSprite.y)<24&&
+        (!this.mascot?.yarn.heldBy||this.mascot.yarn.heldBy===this.selfId)){
+        const now=this.time.now
+        this.draggingYarn={pointerId:pointer.id,lastX:x,lastY:y,lastAt:now,previousX:x,previousY:y,previousAt:now,sentAt:now}
+        this.opts.onYarn({type:'yarn_pickup'})
+        return
+      }
+      if(this.menuGuide&&Math.abs(x-this.menuGuide.sprite.x)<32&&Math.abs(y-this.menuGuide.sprite.y)<38){
+        this.menuGuidePath=[];this.menuGuidePauseUntil=this.time.now+3500;this.opts.onInteract('menu');return
+      }
       if(y<198&&x>185){this.walkTo(272,277,()=>this.opts.onInteract('board'));return}
       if(y<195&&x<175){this.walkTo(93,273,()=>this.opts.onInteract('chef'));return}
       if(y<256&&x>32){this.walkTo(177,273,()=>this.opts.onInteract('cashier'));return}
@@ -197,16 +251,100 @@ class StoreScene extends Phaser.Scene {
       if(tables.some(r=>r.contains(x,y))){this.walkTo(x<180?145:220,y,()=>this.opts.onInteract('seat'));return}
       const p=closestPoint(x,y);this.walkTo(p.x,p.y)
     })
+    this.input.on('pointermove',(pointer:Phaser.Input.Pointer)=>this.dragYarn(pointer))
+    this.input.on('pointerup',(pointer:Phaser.Input.Pointer)=>this.releaseYarn(pointer))
+    this.input.on('pointerupoutside',(pointer:Phaser.Input.Pointer)=>this.releaseYarn(pointer))
   }
   setBoard(orders:BoardOrder[]){
     const latest=(status:BoardOrder['status'])=>orders.find(o=>o.status===status)?.number||'—'
     // The public feed is newest first; keep this small in-game board to five deliveries.
     const deliveries=orders.filter(o=>o.status==='Served').slice(0,5).map(o=>o.number)
     if(this.orderBoardText){
-      this.orderBoardText.setText(`PREP: ${latest('Preparing')}\nREADY: ${latest('Ready')}\nOUT FOR DELIVERY:\n${deliveries.length?deliveries.join('\n'):'—'}`)
+      this.orderBoardText.setText(`PREPARING: ${latest('Preparing')}\nREADY: ${latest('Ready')}\nOUT FOR DELIVERY:\n${deliveries.length?deliveries.join('\n'):'—'}`)
       // Keep even the maximum 24-character order numbers inside the chalkboard.
       this.orderBoardText.setScale(Math.min(1,128/this.orderBoardText.width),1)
     }
+  }
+  private createMascotTextures(){
+    const makeCat=(name:string,pose:'stand'|'sit'|'lie'|'stretch',eyes:'open'|'closed'='open',tail=0)=>{
+      const art=this.make.graphics({x:0,y:0})
+      const fur=0xd58b51,light=0xf7ca88,dark=0x78513f,shadow=0x76513f
+      art.fillStyle(shadow,.25).fillEllipse(23,32,36,5)
+      if(pose==='lie'){
+        art.fillStyle(fur).fillRoundedRect(7,20,32,11,4).fillRect(35,22,7,6)
+        art.fillStyle(light).fillRect(14,25,18,4)
+      }else if(pose==='stretch'){
+        art.fillStyle(fur).fillRoundedRect(14,19,24,10,3).fillRect(7,27,8,4).fillRect(35,27,8,4)
+        art.fillStyle(light).fillRect(22,22,10,4)
+      }else{
+        art.fillStyle(fur).fillRoundedRect(16,17,24,15,5)
+        art.fillStyle(light).fillRect(22,23,12,7)
+        if(pose==='stand')art.fillStyle(fur).fillRect(17,29,5,4).fillRect(34,29,5,4)
+      }
+      art.fillStyle(fur).fillRect(37,22-tail*3,5,7).fillRect(40,17-tail*5,4,8)
+      art.fillStyle(dark).fillRect(39,16-tail*5,5,2)
+      const headY=pose==='lie'?17:pose==='stretch'?19:10
+      art.fillStyle(fur).fillRoundedRect(8,headY,23,19,5)
+      art.fillStyle(fur).fillTriangle(9,headY+3,11,headY-7,17,headY+1).fillTriangle(23,headY+1,29,headY-7,30,headY+4)
+      art.fillStyle(0xe9aa99).fillTriangle(11,headY,12,headY-4,15,headY).fillTriangle(25,headY,28,headY-4,29,headY)
+      art.fillStyle(light).fillRect(12,headY+12,15,6)
+      art.fillStyle(dark)
+      if(eyes==='closed')art.fillRect(13,headY+9,4,1).fillRect(24,headY+9,4,1)
+      else art.fillRect(14,headY+7,2,3).fillRect(25,headY+7,2,3)
+      art.fillStyle(0x9e5f62).fillRect(19,headY+12,3,2)
+      art.generateTexture(name,48,36);art.destroy()
+    }
+    makeCat('cat-idle','stand');makeCat('cat-walk','stand','open',1);makeCat('cat-sit','sit');makeCat('cat-rest','lie');makeCat('cat-sleep','lie','closed');makeCat('cat-stretch','stretch');makeCat('cat-notice','sit','open',1);makeCat('cat-play','stand','open',1)
+    const ball=this.make.graphics({x:0,y:0})
+    ball.fillStyle(0x76513f,.3).fillEllipse(11,18,19,4)
+    ball.fillStyle(0x634471).fillRect(6,4,11,11).fillRect(4,6,15,7)
+    ball.fillStyle(0xb68abc).fillRect(6,4,5,3).fillRect(12,8,5,3).fillRect(7,12,6,2)
+    ball.fillStyle(0xf2c693).fillRect(7,7,3,2).fillRect(14,4,2,3)
+    ball.lineStyle(1,0x634471).lineBetween(13,15,19,17)
+    ball.generateTexture('yarn-ball',23,21);ball.destroy()
+  }
+  setMascot(snapshot:MascotSnapshot){
+    this.mascot=snapshot
+    if(!this.catSprite||!this.yarnSprite)return
+    if(!this.mascotReady){this.catSprite.setPosition(snapshot.cat.x,snapshot.cat.y);this.yarnSprite.setPosition(snapshot.yarn.x,snapshot.yarn.y);this.mascotReady=true}
+    if(this.draggingYarn&&snapshot.yarn.heldBy&&snapshot.yarn.heldBy!==this.selfId)this.draggingYarn=undefined
+  }
+  private updateMascot(delta:number){
+    const snapshot=this.mascot,cat=this.catSprite,ball=this.yarnSprite,label=this.catLabel
+    if(!snapshot||!cat||!ball||!label)return
+    const follow=Math.min(1,delta/90)
+    cat.x=Phaser.Math.Linear(cat.x,snapshot.cat.x,follow);cat.y=Phaser.Math.Linear(cat.y,snapshot.cat.y,follow)
+    if(!this.draggingYarn){ball.x=Phaser.Math.Linear(ball.x,snapshot.yarn.x,follow);ball.y=Phaser.Math.Linear(ball.y,snapshot.yarn.y,follow)}
+    const mood:CatMood=snapshot.cat.mood
+    const texture=mood==='walking'||mood==='approaching_yarn'||mood==='returning_to_idle'?(Math.floor(this.time.now/180)%2?'cat-walk':'cat-idle'):
+      mood==='sleeping'?'cat-sleep':mood==='resting'?'cat-rest':mood==='stretching'?'cat-stretch':mood==='noticing_yarn'?'cat-notice':mood==='playing_with_yarn'?'cat-play':'cat-sit'
+    if(cat.texture.key!==texture)cat.setTexture(texture)
+    cat.setFlipX(snapshot.cat.facing<0)
+    const playful=mood==='playing_with_yarn'&&!this.opts.reducedMotion
+    cat.setAngle(playful?Math.sin(this.time.now/140)*6:0).setScale(playful?1.07:1)
+    cat.setDepth(cat.y+12);label.setPosition(cat.x,cat.y-29).setDepth(cat.y+13)
+    label.setText(mood==='sleeping'?'MIMING zZ':mood==='noticing_yarn'?'MIMING !':'MIMING')
+    ball.setDepth(ball.y+12).setAngle(this.opts.reducedMotion?0:snapshot.yarn.moving?this.time.now/12:0)
+  }
+  private dragYarn(pointer:Phaser.Input.Pointer){
+    const drag=this.draggingYarn
+    if(!drag||drag.pointerId!==pointer.id||this.inputBlocked())return
+    const x=pointer.worldX,y=pointer.worldY
+    if(!mascotFloorPoint(x,y,6))return
+    const now=this.time.now
+    if(Math.hypot(x-drag.lastX,y-drag.lastY)>1){drag.previousX=drag.lastX;drag.previousY=drag.lastY;drag.previousAt=drag.lastAt;drag.lastX=x;drag.lastY=y;drag.lastAt=now}
+    this.yarnSprite?.setPosition(x,y)
+    if(now-drag.sentAt>=80){drag.sentAt=now;this.opts.onYarn({type:'yarn_drag',x,y})}
+  }
+  private releaseYarn(pointer:Phaser.Input.Pointer){
+    const drag=this.draggingYarn
+    if(!drag||drag.pointerId!==pointer.id)return
+    this.draggingYarn=undefined
+    const x=mascotFloorPoint(pointer.worldX,pointer.worldY,6)?pointer.worldX:drag.lastX
+    const y=mascotFloorPoint(pointer.worldX,pointer.worldY,6)?pointer.worldY:drag.lastY
+    const elapsed=Math.max(30,drag.lastAt-drag.previousAt),recent=this.time.now-drag.lastAt<140
+    const vx=recent?(drag.lastX-drag.previousX)/elapsed*700:0,vy=recent?(drag.lastY-drag.previousY)/elapsed*700:0
+    this.opts.onYarn({type:'yarn_release',x,y,vx,vy})
   }
   walkTo(x:number,y:number,callback?:()=>void){if(!this.self||this.inputBlocked())return;this.path=pathFind(new Phaser.Math.Vector2(this.self.sprite.x,this.self.sprite.y),new Phaser.Math.Vector2(x,y));this.afterPath=callback}
   setDirection(x:number,y:number){if(this.inputBlocked()){this.resetMovement();return}this.direction.set(x,y);if(x||y){this.path=[];this.afterPath=undefined}}
@@ -216,9 +354,12 @@ class StoreScene extends Phaser.Scene {
       (active instanceof HTMLElement&&(active.isContentEditable||Boolean(active.closest('input,textarea,select,[role="textbox"]'))))
   }
   private resetMovement(){this.direction.set(0,0);this.path=[];this.afterPath=undefined;this.input?.keyboard?.resetKeys()}
-  setControlsEnabled(value:boolean){this.opts.controlsEnabled=value;this.resetMovement();if(this.input?.keyboard)this.input.keyboard.enabled=value}
-  setReducedMotion(value:boolean){this.opts.reducedMotion=value}
-  private animateCharacter(character:Character,moving:boolean,baseScale=1){
+  setControlsEnabled(value:boolean){
+    if(!value&&this.draggingYarn){const d=this.draggingYarn;this.draggingYarn=undefined;this.opts.onYarn({type:'yarn_release',x:d.lastX,y:d.lastY,vx:0,vy:0})}
+    this.opts.controlsEnabled=value;this.resetMovement();if(this.input?.keyboard)this.input.keyboard.enabled=value
+  }
+  setReducedMotion(value:boolean){this.opts.reducedMotion=value;this.cookingFrame=-2}
+  private animateCharacter(character:Character,moving:boolean,baseScale=VISITOR_SCALE){
     const {sprite,avatar,phase}=character
     if(this.opts.reducedMotion){
       sprite.setScale(baseScale).setAngle(0).setOrigin(.5)
@@ -235,9 +376,63 @@ class StoreScene extends Phaser.Scene {
     const texture=time%(3800+phase%1800)<120?`${avatar}-blink`:avatar
     if(sprite.texture.key!==texture)sprite.setTexture(texture)
   }
+  private moveMenuGuide(delta:number){
+    const guide=this.menuGuide
+    if(!guide)return
+    let moving=false
+    if(!this.opts.reducedMotion&&this.time.now>=this.menuGuidePauseUntil){
+      if(!this.menuGuidePath.length){
+        const stop=menuGuideStops[this.menuGuideStop%menuGuideStops.length]!
+        this.menuGuideStop++
+        this.menuGuidePath=pathFind(new Phaser.Math.Vector2(guide.sprite.x,guide.sprite.y),new Phaser.Math.Vector2(stop.x,stop.y))
+        if(!this.menuGuidePath.length)this.menuGuidePauseUntil=this.time.now+1800
+      }
+      const next=this.menuGuidePath[0]
+      if(next){
+        const distance=Phaser.Math.Distance.Between(guide.sprite.x,guide.sprite.y,next.x,next.y)
+        const step=Math.min(delta,50)/1000*36
+        if(distance<=step){guide.sprite.setPosition(next.x,next.y);this.menuGuidePath.shift();if(!this.menuGuidePath.length)this.menuGuidePauseUntil=this.time.now+1800+Math.random()*1800}
+        else{guide.sprite.x+=(next.x-guide.sprite.x)/distance*step;guide.sprite.y+=(next.y-guide.sprite.y)/distance*step;moving=true}
+      }
+    }
+    this.animateCharacter(guide,moving)
+    guide.label.setPosition(guide.sprite.x,guide.sprite.y-NAME_LABEL_OFFSET)
+    guide.sprite.setDepth(guide.sprite.y+10);guide.label.setDepth(guide.sprite.y+11)
+  }
+  private updateChefCooking(){
+    const frame=this.opts.reducedMotion?-1:Math.floor(this.time.now/140)%12
+    if(frame===this.cookingFrame||!this.cookingEffects)return
+    this.cookingFrame=frame
+    const art=this.cookingEffects
+    art.clear()
+    const stir=frame<0?0:Math.round(Math.sin(frame*Math.PI/6)*4)
+    const panY=132+(frame>=0&&frame%4===0?-1:0)
+    // A dark skillet, bubbling kakanin and a handle make the kitchen task readable at game scale.
+    art.fillStyle(0x382d28).fillRect(74,panY,36,4).fillRect(78,panY+4,29,9).fillRect(109,panY+3,15,4)
+    art.fillStyle(0xb46a3d).fillRect(80,panY+4,25,5)
+    art.fillStyle(0xf6c46d).fillRect(82+Math.max(0,stir),panY+5,5,3).fillRect(96-Math.max(0,stir),panY+6,4,2)
+    art.fillStyle(0x79a365).fillRect(89,panY+6,4,2)
+    if(frame>=0){
+      for(let i=0;i<3;i++){
+        const rise=(frame*2+i*5)%15
+        art.fillStyle(0x9c826c,.7).fillRect(80+i*9,126-rise,2,4)
+        art.fillStyle(0xb49b80,.55).fillRect(83+i*9,122-rise,2,3)
+      }
+    }else{
+      art.fillStyle(0x9c826c,.6).fillRect(82,118,2,4).fillRect(101,115,2,4)
+    }
+    // The chef's hand stirs across the pan while the pan and steam move independently.
+    art.lineStyle(5,0xf4c88f).lineBetween(101,161,108+stir,148)
+    art.fillStyle(0xf4c88f).fillRect(105+stir,145,5,5)
+    art.lineStyle(3,0x765039).lineBetween(107+stir,147,90+stir,137)
+    art.fillStyle(0x765039).fillRect(87+stir,134,7,3)
+  }
   override update(_:number,delta:number){
-    for(const character of this.staff)this.animateCharacter(character,false,1.15)
+    this.updateMascot(delta)
+    for(const character of this.staff)this.animateCharacter(character,false,STAFF_SCALE)
+    this.updateChefCooking()
     for(const character of this.remotes.values())this.animateCharacter(character,this.time.now<character.movingUntil)
+    this.moveMenuGuide(delta)
     if(!this.self)return
     if(this.inputBlocked()){this.resetMovement();this.animateCharacter(this.self,false);return}
     const sprite=this.self.sprite
@@ -257,7 +452,7 @@ class StoreScene extends Phaser.Scene {
       if(bounded(sprite.x,sprite.y+vy*s))sprite.y+=vy*s
     }
     this.animateCharacter(this.self,Math.hypot(sprite.x-previousX,sprite.y-previousY)>.1)
-    this.self.label.setPosition(sprite.x,sprite.y-27)
+    this.self.label.setPosition(sprite.x,sprite.y-NAME_LABEL_OFFSET)
     sprite.setDepth(sprite.y+10);this.self.label.setDepth(sprite.y+11)
     if(this.time.now-this.lastMove>90&&Math.hypot(sprite.x-this.lastX,sprite.y-this.lastY)>1){
       this.lastMove=this.time.now;this.lastX=sprite.x;this.lastY=sprite.y;this.opts.onMove(Math.round(sprite.x),Math.round(sprite.y))
@@ -274,13 +469,13 @@ class StoreScene extends Phaser.Scene {
     for(const p of players){if(p.id===selfId)continue
       let remote=this.remotes.get(p.id)
       if(!remote){
-        remote={sprite:this.add.image(p.x,p.y,p.avatar).setDepth(p.y+10),label:this.add.text(p.x,p.y-27,p.nickname,{fontFamily:'monospace',fontSize:'10px',color:'#3c2d1e',backgroundColor:'#fff5df',padding:{x:3,y:2}}).setOrigin(.5).setDepth(p.y+11),avatar:p.avatar,phase:characterPhase(p.id),movingUntil:0}
+        remote={sprite:this.add.image(p.x,p.y,p.avatar).setDepth(p.y+10).setScale(VISITOR_SCALE),label:this.add.text(p.x,p.y-NAME_LABEL_OFFSET,p.nickname,{fontFamily:'monospace',fontSize:'10px',color:'#3c2d1e',backgroundColor:'#fff5df',padding:{x:3,y:2}}).setOrigin(.5).setDepth(p.y+11),avatar:p.avatar,phase:characterPhase(p.id),movingUntil:0}
         this.remotes.set(p.id,remote)
       }
       if(Math.hypot(p.x-remote.sprite.x,p.y-remote.sprite.y)>.5){
         remote.movingUntil=this.time.now+200
         this.tweens.killTweensOf(remote.sprite)
-        this.tweens.add({targets:remote.sprite,x:p.x,y:p.y,duration:115,onUpdate:()=>{remote!.label.setPosition(remote!.sprite.x,remote!.sprite.y-27);remote!.sprite.setDepth(remote!.sprite.y+10);remote!.label.setDepth(remote!.sprite.y+11)}})
+        this.tweens.add({targets:remote.sprite,x:p.x,y:p.y,duration:115,onUpdate:()=>{remote!.label.setPosition(remote!.sprite.x,remote!.sprite.y-NAME_LABEL_OFFSET);remote!.sprite.setDepth(remote!.sprite.y+10);remote!.label.setDepth(remote!.sprite.y+11)}})
       }
     }
   }
@@ -326,5 +521,5 @@ export function createGame(el:HTMLElement,opts:Options):StoreGame{
   const scene=new StoreScene(opts)
   const game=new Phaser.Game({type:Phaser.AUTO,parent:el,width:W,height:H,backgroundColor:'#d0a377',pixelArt:true,
     scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH,width:W,height:H},scene:[scene],render:{antialias:false}})
-  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value)}
+  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},setMascot:snapshot=>{if(scene.sys?.isActive())scene.setMascot(snapshot)},showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value)}
 }

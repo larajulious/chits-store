@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { avatarOptions, type AvatarId } from '../../shared/avatars'
-const props=defineProps<{avatar:AvatarId;saving:boolean;error:string}>()
+const props=defineProps<{avatar:AvatarId;saving:boolean;error:string;storeOpen:boolean;statusReady:boolean}>()
 const emit=defineEmits<{ 'update:avatar':[value:AvatarId];enter:[] }>()
 const selected=computed(()=>avatarOptions.find(option=>option.id===props.avatar)!)
 </script>
@@ -8,15 +8,16 @@ const selected=computed(()=>avatarOptions.find(option=>option.id===props.avatar)
   <main class="structured-lobby">
     <header class="lobby-header">
       <div class="lobby-brand"><span class="brand-mark"><AvatarIcon avatar="palitaw"/></span><div><strong>CHITS STORE</strong><span>A little company. A little kakanin.</span></div></div>
-      <span class="welcome-tag">Everyone’s welcome</span>
+      <span class="welcome-tag" :class="{'store-closed-tag':statusReady&&!storeOpen}">{{ !statusReady?'Checking store…':storeOpen?'Everyone’s welcome':'Closed for now' }}</span>
     </header>
     <div class="lobby-content">
       <section class="lobby-welcome" aria-labelledby="welcome-heading">
         <p class="lobby-eyebrow">YOUR NEIGHBORHOOD VIRTUAL BAKERY</p>
-        <h1 id="welcome-heading">Come in.<br>Make yourself<br><em>at home.</em></h1>
-        <p class="welcome-copy">A cozy place to hang out, meet other visitors, and follow what’s cooking.</p>
-        <div class="bakery-scene" aria-hidden="true">
-          <div class="welcome-store"><div class="store-roof"/><div class="store-window left"/><div class="store-window right"/><div class="store-sign">✦ CHITS STORE ✦</div><div class="store-door"/></div>
+        <h1 v-if="storeOpen||!statusReady" id="welcome-heading">Come in.<br>Make yourself<br><em>at home.</em></h1>
+        <h1 v-else id="welcome-heading">See you<br><em>again soon.</em></h1>
+        <p class="welcome-copy">{{ statusReady&&!storeOpen?'Chits Meryenda Hub is closed right now. Come back when we open the doors again.':'A cozy place to hang out, meet other visitors, and follow what’s cooking.' }}</p>
+        <div class="bakery-scene" :class="{'scene-closed':statusReady&&!storeOpen}" aria-hidden="true">
+          <div class="welcome-store"><div class="store-roof"/><div class="store-chimney"><span class="store-steam steam-one"/><span class="store-steam steam-two"/></div><div class="store-window left"/><div class="store-window right"/><div class="store-sign">✦ CHITS STORE ✦</div><div class="store-door"/><div v-if="statusReady&&!storeOpen" class="store-sleep"><span>Z</span><span>Z</span><span>Z</span></div></div>
           <span class="scene-caption">A small store with room for you.</span>
         </div>
         <ul class="visit-features"><li><StoreGlyph name="door"/>Explore the bakery</li><li><StoreGlyph name="people"/>Meet other visitors</li><li><StoreGlyph name="orders"/>Check live orders</li></ul>
@@ -31,10 +32,10 @@ const selected=computed(()=>avatarOptions.find(option=>option.id===props.avatar)
           </button>
         </fieldset>
         <p class="carousel-hint"><span>Swipe to explore all {{ avatarOptions.length }} buddies</span><StoreGlyph name="arrow"/></p>
-        <div class="buddy-selection" aria-live="polite"><span class="selected-portrait"><AvatarIcon :avatar="avatar"/></span><div><span class="selection-label">YOUR FOOD BUDDY</span><strong>{{ selected.label }}</strong></div><span class="selection-ready"><StoreGlyph name="check"/>Ready to visit</span></div>
+        <div class="buddy-selection" aria-live="polite"><span class="selected-portrait"><AvatarIcon :avatar="avatar"/></span><div><span class="selection-label">YOUR FOOD BUDDY</span><strong>{{ selected.label }}</strong></div><span class="selection-ready"><StoreGlyph v-if="storeOpen" name="check"/>{{ storeOpen?'Ready to visit':'See you soon' }}</span></div>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
-        <button class="enter-bakery" type="submit" :disabled="saving"><span>{{ saving?'Opening the door…':'Enter the store' }}</span><StoreGlyph name="arrow"/></button>
-        <p class="entry-note">No account needed. We’ll give you a guest name.</p>
+        <button class="enter-bakery" type="submit" :disabled="saving||!statusReady||!storeOpen"><span>{{ saving?'Opening the door…':!statusReady?'Checking store…':storeOpen?'Enter the store':'Store closed' }}</span><StoreGlyph name="arrow"/></button>
+        <p class="entry-note">{{ statusReady&&!storeOpen?'Please visit us again soon.':'No account needed. We’ll give you a guest name.' }}</p>
       </form>
     </div>
     <footer class="lobby-footer"><span>A little pause in your day.</span><span>Choose a buddy. Stay awhile.</span></footer>
@@ -119,7 +120,7 @@ button:focus-visible{outline:3px solid #6c875d;outline-offset:3px}
   .lobby-brand strong{white-space:nowrap}.welcome-tag{font-size:9px;padding-inline:7px}
   .lobby-welcome{grid-template-columns:minmax(0,1fr) 104px;column-gap:12px}.lobby-welcome h1{font-size:24px}
 }
-@media(prefers-reduced-motion:reduce){.store-sign,.store-door{animation:none}.buddy-choice{transition:none}}
+@media(prefers-reduced-motion:reduce){.buddy-choice{transition:none}}
 </style>
 
 <style scoped src="../assets/css/pixel-entrance.css"/>

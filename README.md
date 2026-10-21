@@ -6,19 +6,24 @@ A cozy multiplayer bakery prototype, built in one **Nuxt + Phaser + SQLite** pro
 
 - **No invitations, order-based authentication, or private customer links.**
 - Public home page lets anyone select a food-inspired avatar and immediately enter.
+- Staff can close or reopen the store from a header button beside Today's menu. Closing stops new entries and returns connected visitors to the closed welcome screen; reopening allows entry again. The open/closed state is stored in SQLite and survives server restarts. The welcome screen shows the status and checks again every 15 seconds.
 - The structured pixel layout is the only public layout at `/` and `/store`; no preview query parameter is needed.
+- The welcome-page storefront has subtle pixel animation: warm windows, a gently pulsing sign, a door that occasionally opens, and chimney puffs. When closed, its door stays shut, the windows dim and gently pulse, and small “Z”s drift above the roof. Reduced motion keeps both scenes still.
 - A generated guest nickname (`Mochi #001`, etc.) avoids requiring usernames or accounts.
 - A browser session represents one public visitor; returning visitors can choose a different avatar.
 - WebSocket multiplayer and chat now authenticate public visitor sessions, not orders.
-- Public order board shows **only order numbers and Preparing/Ready/Out for Delivery/Delivered statuses**. The in-game Live Orders board lists up to five most recent Out for Delivery orders; the Orders panel keeps the full public feed. Orders remain active through Out for Delivery; Delivered orders remain on the public board for five minutes and in admin history.
+- Public order board shows **only order numbers and Preparing/Ready/Out for Delivery/Delivered statuses**. The in-game Live Orders board spells out **Preparing** and lists up to five most recent Out for Delivery orders; the Orders panel keeps the full public feed. Orders remain active through Out for Delivery; Delivered orders remain on the public board for five minutes and in admin history.
 - Removed **My Order**, personal Ready notices, and automatic ejection when an order goes out for delivery, because public visitors are not linked to a particular order.
-- Admin still logs in, creates orders, and advances statuses. No customer links are generated.
+- Admin still logs in, creates orders, and advances statuses. Create order assigns numbers automatically: **100, 101, 102…**. The SQLite counter survives restarts and skips numbers already in use; existing orders keep their numbers. No customer links are generated.
 - Staff have optional Community Moderation controls: disable chat, temporary mute and kick.
+- Staff can open **Today's menu** in the admin header to add, edit and remove up to 30 items with peso prices. The menu is stored in SQLite for the current Manila date; a fresh list starts the next day without deleting older records. A small food mascot walks around the store and opens the live menu when tapped. Visitors can also use the Menu action below the game.
+- Staff can open **Reset data** in the admin header to clear selected categories: today's menu, orders and order number counter, suggestions/reviews, current chat history, or visitor sessions. The dialog requires typing `RESET`; the existing admin session authorizes the action. Resetting visitor sessions sends connected visitors back to the entrance; admin credentials and store availability are preserved. Back up the SQLite database before clearing records you may need later.
 - The admin dashboard includes Customer chat: read visitor messages and reply as verified staff in the same public Community Chat. Messages are limited to 160 characters; the latest 50 are temporary and clear on server restart. Pausing public chat also pauses staff sends.
 - Visitors can tap the pixel feedback box near the entrance or the Feedback action to send a suggestion or review (up to 500 characters). Staff approve/reject submissions in **Customer feedback** and can hide published posts. Only approved posts appear publicly, for **10 hours after approval**; expiry persists across restarts and posts disappear from an open board automatically.
 - Feedback is stored locally in an additive SQLite table. Pending/rejected/expired records are retained privately; visibility expiry does not delete them. Public and staff lists show up to 50 posts per queue. Submission limits are three per visitor per hour, at least one minute apart, plus ten per address per hour.
 - The Leave button asks for confirmation. Confirming returns to the welcome screen with “Thank you for visiting Chits Meryenda Hub!”; cancelling keeps the visit connected.
-- In-store food characters gently breathe and blink while idle, with a small squash, bounce and lean while walking. Cosmetic motion respects the browser’s reduced-motion preference and does not change game positions.
+- In-store food characters are slightly larger and gently breathe and blink while idle, with a small squash, bounce and lean while walking. Cosmetic motion respects the browser’s reduced-motion preference and does not change game positions.
+- The chef stirs a pan of meryenda at the kitchen stove while food bubbles and steam rises. The cooking motion becomes a still scene when reduced motion is preferred.
 - Staff messages also appear as temporary speech bubbles above the in-game cashier for connected customers; the full messages remain in Community Chat.
 - On desktop, the dashboard shows order creation and a filtered order queue alongside customer chat. Preparing, Ready, Out for Delivery and Delivered counts reflect the most recent 100 orders; The queue opens on Preparing and offers Preparing, Ready, Out for Delivery and Delivered filters. Use Mark delivered on an Out for Delivery order, confirm receipt, then find completed orders under Delivered. Smaller screens use a stacked layout.
 - Original `/enter/:token` links redirect to the public entrance for compatibility.
@@ -43,7 +48,7 @@ npm run build
 npm test
 ```
 
-The integration suites use temporary SQLite databases and test configuration. The old invitation-only test is retained as historical coverage and skipped; `npm test` runs public visitor and production-start coverage.
+The integration suites use temporary SQLite databases and test configuration. The old invitation-only test is retained as historical coverage outside the current test command; `npm test` runs public visitor, feedback, daily menu, store availability, automatic numbering and production-start coverage.
 
 URLs:
 
@@ -55,11 +60,14 @@ URLs:
 
 1. Open home page and choose an avatar. You should enter without any order number.
 2. Open another browser profile and join with another avatar. Check movement and chat.
-3. Login at `/admin`; create `CH-1025`. Verify it appears under Preparing for both visitors.
+3. Login at `/admin` and click **Create order**. Verify the automatically assigned number appears under Preparing for both visitors. On a fresh database the first two orders are 100 and 101; existing numbers are skipped.
 4. Set Ready, Out for Delivery, then Delivered. Both visitors should see status updates; neither is kicked out.
 5. Refresh one browser, return through avatar selection and confirm no invitation is needed.
 6. Test moderation controls: temporarily disable chat and mute/kick a visitor.
 7. Check mobile portrait layout, joystick, chat, and cashier/chef interactions.
+8. In admin, close the store and confirm the warning. Visitors inside should return automatically to the closed welcome screen, where entry is disabled. Reopen the store and check that entry works again.
+9. Open the same visitor session in two tabs. The older tab should return to the welcome screen automatically while the new tab stays connected.
+10. In admin, add today's menu items and prices, edit one and remove another. In the store, tap the walking **MENU • TAP** character or the Menu action; confirm the prices update and a fresh menu appears after the Manila date changes.
 
 ## Running on a VPS
 

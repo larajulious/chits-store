@@ -49,6 +49,15 @@ export function db() {
         revoked_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS orders_status_idx ON orders(status, updated_at);
+      CREATE TABLE IF NOT EXISTS order_sequence (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        next_number INTEGER NOT NULL CHECK (next_number>=100)
+      );
+      CREATE TABLE IF NOT EXISTS store_settings (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        is_open INTEGER NOT NULL DEFAULT 1 CHECK (is_open IN (0,1))
+      );
+      INSERT OR IGNORE INTO store_settings(id,is_open) VALUES(1,1);
       CREATE TABLE IF NOT EXISTS visitors (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         avatar_key TEXT NOT NULL,
@@ -69,6 +78,15 @@ export function db() {
       );
       CREATE INDEX IF NOT EXISTS feedback_public_idx ON feedback(status, expires_at, approved_at);
       CREATE INDEX IF NOT EXISTS feedback_visitor_idx ON feedback(visitor_id, created_at);
+      CREATE TABLE IF NOT EXISTS daily_menu (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        service_date TEXT NOT NULL,
+        name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 60),
+        price_centavos INTEGER NOT NULL CHECK (price_centavos BETWEEN 1 AND 1000000),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS daily_menu_date_idx ON daily_menu(service_date, id);
     `)
     // Add completion without rebuilding legacy tables or changing their status CHECK.
     const connection=database

@@ -128,8 +128,9 @@ test('public bakery foundation (isolated built server)',{timeout:60_000},async t
   await t.test('staff create orders; Ready, Out for Delivery and Delivered update both visitors without ejection',async()=>{
     const login=await req('/api/admin/login',{method:'POST',body:{password}});assert.equal(login.status,200);admin=cookieOf(login)
     assert.equal((await req('/api/me',{cookie:admin})).status,401)
-    const created=await req('/api/admin/orders',{method:'POST',cookie:admin,body:{number:'PUBLIC-1001'}});assert.equal(created.status,200)
+    const created=await req('/api/admin/orders',{method:'POST',cookie:admin,body:{}});assert.equal(created.status,200)
     const result=await created.json();assert.equal('link' in result,false);order=result.order
+    assert.equal(order.number,'100')
     assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:admin,body:{status:'Served'}})).status,400)
     assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:admin,body:{status:'Delivered'}})).status,400)
     for(const status of ['Ready','Served','Delivered']){

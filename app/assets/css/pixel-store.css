@@ -1,8 +1,8 @@
 /* Scoped to the public store. Integer edges, local lettering, no image filters. */
 .game-shell{--pixel-ink:#674731;--pixel-paper:#fff3da;--pixel-shadow:#b68c61;font-family:'Courier New',monospace;color:#493425;border-radius:0}
 .structured-store{border:3px solid var(--pixel-ink);border-radius:0;background:var(--pixel-paper);box-shadow:6px 6px 0 #bd9c76}
-.structured-store-top,.game-top{background:#fff3da;border-bottom:3px solid var(--pixel-ink)}
-.visitor-identity strong,.game-top strong,.structured-actions,.game-hud .btn,.store-dialog .btn,.store-dialog .section-head,.order-status-heading,.visit-status .pill,.bakery-status-strip{font-family:Silkscreen,monospace;font-weight:400}
+.structured-store-top{background:#fff3da;border-bottom:3px solid var(--pixel-ink)}
+.visitor-identity strong,.structured-actions,.store-dialog .btn,.store-dialog .section-head,.order-status-heading,.visit-status .pill,.bakery-status-strip{font-family:Silkscreen,monospace;font-weight:400}
 .visitor-identity strong{font-size:12px;letter-spacing:0}.visitor-identity div>span{font-size:12px;color:#755b44}
 .visitor-portrait{border:2px solid #987047;border-radius:0;background:#ecd8b1;box-shadow:2px 2px 0 #d0af7c}
 .game-shell .pill{border-radius:0;background:#e9d0a7;color:#62452d;border:1px solid #b08a5e}
@@ -17,6 +17,7 @@
 .structured-actions svg{width:24px;height:24px}
 .structured-store .structured-hint{background:#f5e5c5!important;color:#7d654c;font-size:10px}
 .structured-notice{border-bottom:2px solid #8a9d67}.structured-notice strong{font-family:'Courier New',monospace}
+.structured-notice button,.game-shell>.card{border-radius:0}
 .game-shell .overlay-shade{background:#34281bb3;backdrop-filter:none;padding:18px}
 .game-shell .store-dialog{border:0;border-radius:0;background:#fff3da;box-shadow:4px 0 #674731,-4px 0 #674731,0 -4px #674731,0 4px #674731,4px 8px #34281b,inset 0 0 0 2px #e3c597;padding:18px;gap:14px;scrollbar-width:thin;scrollbar-color:#a78053 #ecdabb}
 .game-shell .dialog-header{border-bottom:2px solid #d4b68a;padding-bottom:14px;grid-template-columns:minmax(0,1fr) 36px}
@@ -29,6 +30,7 @@
 .game-shell .store-dialog .input{border:2px solid #b08a5e;border-radius:0;background:#fffbef;color:#493425;box-shadow:inset 2px 2px 0 #ead9ba;font-family:'Courier New',monospace;font-size:13px}
 .game-shell .store-dialog .chat-messages{border:2px solid #c5a678;border-radius:0;background:#f2e4c9;box-shadow:inset 2px 2px 0 #e3cfaa;padding:12px}
 .game-shell .chat-line{font-size:13px;line-height:1.7;padding-bottom:8px;border-bottom:1px dashed #cdb18a}.game-shell .chat-line strong{color:#815438}.chat-empty{font-size:12px;color:#806649}
+.chat-staff-tag{display:inline-block;margin-right:6px;padding:2px 4px;border:1px solid #91aa6f;background:#d3e3b1;color:#3e5939;font-family:Silkscreen,monospace;font-size:8px;line-height:1.4;vertical-align:middle}
 .game-shell .store-dialog .privacy{font-family:'Courier New',monospace;font-size:11px;color:#7f684f;line-height:1.6}
 .order-status-group{border:2px solid #c7a576;border-radius:0;background:#f2e4c9;box-shadow:inset 2px 2px 0 #fffae9}
 .order-status-heading{font-size:11px;color:#674731}.order-status-heading>span{border:1px solid #b08a5e;border-radius:0;background:#e3cca3;font-family:'Courier New',monospace}

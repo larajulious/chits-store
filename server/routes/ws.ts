@@ -1,6 +1,6 @@
 import { defineWebSocketHandler } from 'h3'
 import { allowedOrigin, visitorSessionFromCookie, visitorName } from '../utils/auth'
-import { joinRoom, leaveRoom, findMember, broadcast, playerList, isChatEnabled, isMuted, authorized, recordInteraction } from '../utils/room'
+import { joinRoom, leaveRoom, findMember, broadcast, publishChat, playerList, isChatEnabled, isMuted, authorized, recordInteraction } from '../utils/room'
 
 export default defineWebSocketHandler({
   upgrade(request){
@@ -48,7 +48,7 @@ export default defineWebSocketHandler({
       if (p.chatCount>20) { peer.send(JSON.stringify({type:'chat_slow_down'})); return }
       p.lastChat=now
       recordInteraction(p)
-      broadcast({type:'chat',id:p.id,nickname:p.nickname,text,at:now})
+      publishChat({id:p.id,nickname:p.nickname,text,at:now,role:'visitor'})
     } else if (data.type === 'emote') {
       if(!isChatEnabled()||isMuted(p.visitorId)){peer.send(JSON.stringify({type:'chat_blocked'}));return}
       if(typeof data.emoji!=='string')return

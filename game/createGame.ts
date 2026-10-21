@@ -1,13 +1,20 @@
 import Phaser from 'phaser'
 import { avatarOptions, type AvatarId } from '../shared/avatars'
+import { reactionOptions } from '../shared/reactions'
+import type {OrderStatus} from '../shared/order-status'
 
 export type Avatar = AvatarId
 export type Player = { id:string;nickname:string;avatar:string;x:number;y:number }
-export type BoardOrder = { id:number;number:string;status:'Preparing'|'Ready'|'Served' }
-export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;showBubble:(id:string,text:string)=>void;setBoard:(orders:BoardOrder[])=>void }
-type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void}
+export type BoardOrder = { id:number;number:string;status:OrderStatus }
+export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void }
+type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;reducedMotion?:boolean;controlsEnabled?:boolean}
+type Character = {sprite:Phaser.GameObjects.Image;avatar:string;phase:number}
+type VisitorCharacter = Character & {label:Phaser.GameObjects.Text;movingUntil:number;bubble?:Phaser.GameObjects.Text|Phaser.GameObjects.Image}
+function characterPhase(id:string){let hash=0;for(const char of id)hash=(hash*31+char.charCodeAt(0))>>>0;return hash%6000}
 const W=360,H=580,CELL=20
-const obstructions=[new Phaser.Geom.Rectangle(48,328,87,60),new Phaser.Geom.Rectangle(228,365,86,58)]
+const tables=[new Phaser.Geom.Rectangle(48,328,87,60),new Phaser.Geom.Rectangle(228,365,86,58)]
+const feedbackArea=new Phaser.Geom.Rectangle(282,472,44,40)
+const obstructions=[...tables,feedbackArea]
 function bounded(x:number,y:number){return Math.max(20,Math.min(340,x))>=20&&x>=20&&x<=340&&y>=260&&y<=542&&!obstructions.some(r=>r.contains(x,y))}
 function closestPoint(x:number,y:number){const a=Math.max(20,Math.min(340,x)),b=Math.max(260,Math.min(542,y));if(bounded(a,b))return {x:a,y:b};return {x:180,y:500}}
 function key(x:number,y:number){return `${x}|${y}`}
@@ -33,8 +40,9 @@ function pathFind(start:Phaser.Math.Vector2,target:Phaser.Math.Vector2){
 
 class StoreScene extends Phaser.Scene {
   private opts:Options
-  private self?:{sprite:Phaser.GameObjects.Image,label:Phaser.GameObjects.Text}
-  private remotes=new Map<string,{sprite:Phaser.GameObjects.Image,label:Phaser.GameObjects.Text,bubble?:Phaser.GameObjects.Text}>()
+  private self?:VisitorCharacter
+  private remotes=new Map<string,VisitorCharacter>()
+  private staff:Character[]=[]
   private direction=new Phaser.Math.Vector2(0,0)
   private path:Phaser.Math.Vector2[]=[]
   private afterPath?:()=>void
@@ -43,7 +51,10 @@ class StoreScene extends Phaser.Scene {
   private lastX=180
   private lastY=510
   private selfId=''
-  private selfBubble?:Phaser.GameObjects.Text
+  private selfBubble?:Phaser.GameObjects.Text|Phaser.GameObjects.Image
+  private cashier?:Phaser.GameObjects.Image
+  private cashierBubble?:Phaser.GameObjects.Text
+  private cashierBubbleTimer?:Phaser.Time.TimerEvent
   private orderBoardText?:Phaser.GameObjects.Text
   constructor(opts:Options){super('Store');this.opts=opts}
   create(){
@@ -61,17 +72,25 @@ class StoreScene extends Phaser.Scene {
     g.fillStyle(0xffcd81).fillRect(60,121,38,8)
     g.fillStyle(0xc7e1be).fillRect(116,103,23,23)
     // Order board on the right
-    g.fillStyle(0x6e4935).fillRoundedRect(184,71,162,121,7)
-    g.fillStyle(0x303d38).fillRoundedRect(192,78,146,106,3)
-    this.add.text(265,89,'LIVE ORDERS',{fontFamily:'monospace',fontSize:'13px',color:'#ffe1a7',fontStyle:'bold'}).setOrigin(.5)
-    this.orderBoardText=this.add.text(201,112,'PREP: —\nREADY: —\nSERVED: —',{fontFamily:'monospace',fontSize:'11px',color:'#dfecd0',lineSpacing:10})
+    g.fillStyle(0x6e4935).fillRoundedRect(184,65,162,132,7)
+    g.fillStyle(0x303d38).fillRoundedRect(192,72,146,118,3)
+    this.add.text(265,82,'LIVE ORDERS',{fontFamily:'monospace',fontSize:'13px',color:'#ffe1a7',fontStyle:'bold'}).setOrigin(.5)
+    this.orderBoardText=this.add.text(201,98,'',{fontFamily:'monospace',fontSize:'9px',color:'#dfecd0',lineSpacing:0})
+    this.setBoard([])
     // Counter across shop
     g.fillStyle(0x674730).fillRect(34,208,292,46);g.fillStyle(0xa8724e).fillRect(37,199,285,44)
     g.fillStyle(0xedc18a).fillRect(47,202,262,8)
     this.add.text(181,231,'ORDER COUNTER',{fontFamily:'monospace',fontSize:'13px',fontStyle:'bold',color:'#fff0ce'}).setOrigin(.5)
     // Waiting tables and mats
-    for(const t of obstructions){g.fillStyle(0x875943).fillRoundedRect(t.x,t.y,t.width,t.height,8);g.fillStyle(0xf4d3a3).fillRoundedRect(t.x+8,t.y+8,t.width-16,t.height-16,7)}
+    for(const t of tables){g.fillStyle(0x875943).fillRoundedRect(t.x,t.y,t.width,t.height,8);g.fillStyle(0xf4d3a3).fillRoundedRect(t.x+8,t.y+8,t.width-16,t.height-16,7)}
     g.fillStyle(0xad775b).fillRect(137,552,85,28);g.fillStyle(0xefd5a4).fillRoundedRect(145,548,68,28,7)
+    // A pixel suggestion box visitors can walk over to and open.
+    g.fillStyle(0x674731).fillRect(282,472,44,40)
+    g.fillStyle(0xc4935a).fillRect(285,475,38,34)
+    g.fillStyle(0xffe6ad).fillRect(289,486,30,18)
+    g.fillStyle(0x493425).fillRect(290,479,28,4)
+    this.add.text(304,462,'FEEDBACK',{fontFamily:'monospace',fontSize:'8px',color:'#5f4637',fontStyle:'bold'}).setOrigin(.5)
+    this.add.text(304,495,'WRITE',{fontFamily:'monospace',fontSize:'8px',color:'#674731'}).setOrigin(.5)
     this.add.text(180,562,'ENTRANCE',{fontFamily:'monospace',fontSize:'10px',color:'#5f4637'}).setOrigin(.5)
     this.add.text(180,13,'✦ CHITS STORE ✦',{fontSize:'15px',fontFamily:'monospace',color:'#fff3ce',fontStyle:'bold'}).setOrigin(.5)
     this.add.text(92,65,'KITCHEN',{fontFamily:'monospace',fontSize:'11px',color:'#5c392a'}).setOrigin(.5)
@@ -134,44 +153,97 @@ class StoreScene extends Phaser.Scene {
       }else{
         art.fillStyle(detail).fillRect(3,12,26,19);art.fillStyle(body).fillRoundedRect(2,1,28,26,7)
       }
-      art.fillStyle(0x33251f).fillRect(9,12,3,4).fillRect(22,12,3,4)
       art.fillStyle(0xe18e8e).fillRect(5,18,5,3).fillRect(24,18,5,3)
       if(!['cashier','chef'].includes(name))art.fillStyle(0x815145).fillRect(15,21,4,2)
       if(name==='chef'){art.fillStyle(0xfff8e7).fillRect(3,0,28,7);art.fillRect(8,-5,17,6)}
       if(name==='cashier'){art.fillStyle(0x4d7857).fillRect(6,26,22,5)}
+      art.fillStyle(0x33251f).fillRect(9,14,3,1).fillRect(22,14,3,1)
+      art.generateTexture(`${name}-blink`,34,34)
+      art.fillStyle(0x33251f).fillRect(9,12,3,4).fillRect(22,12,3,4)
       art.generateTexture(name,34,34);art.destroy()
+    }
+    for(const reaction of reactionOptions){
+      const art=this.make.graphics({x:0,y:0})
+      art.fillStyle(0x674731).fillRect(0,2,40,36).fillRect(2,0,36,40)
+      art.fillStyle(0xfff3da).fillRect(2,2,36,36)
+      for(const [x,y,width,height,color] of reaction.pixels)art.fillStyle(color).fillRect(4+x*2,4+y*2,width*2,height*2)
+      art.generateTexture(`reaction-${reaction.id}`,40,40);art.destroy()
     }
     const chef=this.add.image(89,164,'chef').setDepth(180).setScale(1.15)
     const cashier=this.add.image(178,190,'cashier').setDepth(191).setScale(1.15)
-    this.tweens.add({targets:chef,y:161,duration:500,yoyo:true,repeat:-1,ease:'Sine.easeInOut'})
-    this.tweens.add({targets:cashier,scaleY:1.22,duration:1100,yoyo:true,repeat:-1})
+    this.cashier=cashier
+    this.staff=[{sprite:chef,avatar:'chef',phase:characterPhase('chef')},{sprite:cashier,avatar:'cashier',phase:characterPhase('cashier')}]
     this.add.text(92,190,'CHEF',{fontFamily:'monospace',fontSize:'10px',color:'#674530'}).setOrigin(.5)
     this.add.text(177,165,'CASHIER',{fontFamily:'monospace',fontSize:'10px',color:'#674530'}).setOrigin(.5)
     const sprite=this.add.image(180,510,this.opts.avatar).setDepth(520)
     const label=this.add.text(180,490,this.opts.nickname,{fontFamily:'monospace',fontSize:'11px',fontStyle:'bold',color:'#38291d',backgroundColor:'#fff7e1',padding:{x:4,y:2}}).setOrigin(.5).setDepth(521)
-    this.self={sprite,label}
-    if(this.input.keyboard)this.keys=this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT') as Record<string,Phaser.Input.Keyboard.Key>
+    this.self={sprite,label,avatar:this.opts.avatar,phase:characterPhase(this.opts.nickname),movingUntil:0}
+    if(this.input.keyboard){
+      // Global capture prevents native typing even when update() ignores focused inputs.
+      this.keys=this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT',false) as Record<string,Phaser.Input.Keyboard.Key>
+      this.input.keyboard.on('keydown',(event:KeyboardEvent)=>{
+        if(this.inputBlocked()||event.isComposing){this.input.keyboard?.resetKeys();return}
+        if(event.key.startsWith('Arrow')&&!event.altKey&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey)event.preventDefault()
+      })
+    }
+    this.setControlsEnabled(this.opts.controlsEnabled!==false)
     this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>{
+      if(this.inputBlocked())return
       const x=pointer.worldX,y=pointer.worldY
       if(y<198&&x>185){this.walkTo(272,277,()=>this.opts.onInteract('board'));return}
       if(y<195&&x<175){this.walkTo(93,273,()=>this.opts.onInteract('chef'));return}
       if(y<256&&x>32){this.walkTo(177,273,()=>this.opts.onInteract('cashier'));return}
-      if(obstructions.some(r=>r.contains(x,y))){this.walkTo(x<180?145:220,y,()=>this.opts.onInteract('seat'));return}
+      if(x>=274&&x<=334&&y>=450&&y<=520){this.walkTo(260,500,()=>this.opts.onInteract('feedback'));return}
+      if(tables.some(r=>r.contains(x,y))){this.walkTo(x<180?145:220,y,()=>this.opts.onInteract('seat'));return}
       const p=closestPoint(x,y);this.walkTo(p.x,p.y)
     })
   }
   setBoard(orders:BoardOrder[]){
     const latest=(status:BoardOrder['status'])=>orders.find(o=>o.status===status)?.number||'—'
-    this.orderBoardText?.setText(`PREP: ${latest('Preparing')}\nREADY: ${latest('Ready')}\nSERVED: ${latest('Served')}`)
+    // The public feed is newest first; keep this small in-game board to five deliveries.
+    const deliveries=orders.filter(o=>o.status==='Served').slice(0,5).map(o=>o.number)
+    if(this.orderBoardText){
+      this.orderBoardText.setText(`PREP: ${latest('Preparing')}\nREADY: ${latest('Ready')}\nOUT FOR DELIVERY:\n${deliveries.length?deliveries.join('\n'):'—'}`)
+      // Keep even the maximum 24-character order numbers inside the chalkboard.
+      this.orderBoardText.setScale(Math.min(1,128/this.orderBoardText.width),1)
+    }
   }
-  walkTo(x:number,y:number,callback?:()=>void){if(!this.self)return;this.path=pathFind(new Phaser.Math.Vector2(this.self.sprite.x,this.self.sprite.y),new Phaser.Math.Vector2(x,y));this.afterPath=callback}
-  setDirection(x:number,y:number){this.direction.set(x,y);if(x||y){this.path=[];this.afterPath=undefined}}
+  walkTo(x:number,y:number,callback?:()=>void){if(!this.self||this.inputBlocked())return;this.path=pathFind(new Phaser.Math.Vector2(this.self.sprite.x,this.self.sprite.y),new Phaser.Math.Vector2(x,y));this.afterPath=callback}
+  setDirection(x:number,y:number){if(this.inputBlocked()){this.resetMovement();return}this.direction.set(x,y);if(x||y){this.path=[];this.afterPath=undefined}}
+  private inputBlocked(){
+    const active=document.activeElement
+    return this.opts.controlsEnabled===false||Boolean(document.querySelector('dialog[open]'))||
+      (active instanceof HTMLElement&&(active.isContentEditable||Boolean(active.closest('input,textarea,select,[role="textbox"]'))))
+  }
+  private resetMovement(){this.direction.set(0,0);this.path=[];this.afterPath=undefined;this.input?.keyboard?.resetKeys()}
+  setControlsEnabled(value:boolean){this.opts.controlsEnabled=value;this.resetMovement();if(this.input?.keyboard)this.input.keyboard.enabled=value}
+  setReducedMotion(value:boolean){this.opts.reducedMotion=value}
+  private animateCharacter(character:Character,moving:boolean,baseScale=1){
+    const {sprite,avatar,phase}=character
+    if(this.opts.reducedMotion){
+      sprite.setScale(baseScale).setAngle(0).setOrigin(.5)
+      if(sprite.texture.key!==avatar)sprite.setTexture(avatar)
+      return
+    }
+    const time=this.time.now+phase
+    const breath=Math.sin(time/800),step=Math.sin(time/95)
+    const squash=moving?step*.045:breath*.02
+    // Animate only the artwork: x/y remain the collision and network coordinates.
+    sprite.setScale(baseScale*(1+squash),baseScale*(1-squash))
+      .setAngle(moving?step*3:0)
+      .setOrigin(.5,.5+(moving?Math.abs(step)*1.5:Math.max(0,breath)*.4)/34)
+    const texture=time%(3800+phase%1800)<120?`${avatar}-blink`:avatar
+    if(sprite.texture.key!==texture)sprite.setTexture(texture)
+  }
   override update(_:number,delta:number){
+    for(const character of this.staff)this.animateCharacter(character,false,1.15)
+    for(const character of this.remotes.values())this.animateCharacter(character,this.time.now<character.movingUntil)
     if(!this.self)return
+    if(this.inputBlocked()){this.resetMovement();this.animateCharacter(this.self,false);return}
     const sprite=this.self.sprite
+    const previousX=sprite.x,previousY=sprite.y
     let vx=this.direction.x,vy=this.direction.y
-    const el=document.activeElement?.tagName
-    if(el!=='INPUT'&&el!=='TEXTAREA'&&this.keys){
+    if(this.keys){
       const k=this.keys;vx+=(k.A?.isDown||k.LEFT?.isDown?-1:0)+(k.D?.isDown||k.RIGHT?.isDown?1:0)
       vy+=(k.W?.isDown||k.UP?.isDown?-1:0)+(k.S?.isDown||k.DOWN?.isDown?1:0)
     }
@@ -184,6 +256,7 @@ class StoreScene extends Phaser.Scene {
       if(bounded(sprite.x+vx*s,sprite.y))sprite.x+=vx*s
       if(bounded(sprite.x,sprite.y+vy*s))sprite.y+=vy*s
     }
+    this.animateCharacter(this.self,Math.hypot(sprite.x-previousX,sprite.y-previousY)>.1)
     this.self.label.setPosition(sprite.x,sprite.y-27)
     sprite.setDepth(sprite.y+10);this.self.label.setDepth(sprite.y+11)
     if(this.time.now-this.lastMove>90&&Math.hypot(sprite.x-this.lastX,sprite.y-this.lastY)>1){
@@ -201,18 +274,42 @@ class StoreScene extends Phaser.Scene {
     for(const p of players){if(p.id===selfId)continue
       let remote=this.remotes.get(p.id)
       if(!remote){
-        remote={sprite:this.add.image(p.x,p.y,p.avatar).setDepth(p.y+10),label:this.add.text(p.x,p.y-27,p.nickname,{fontFamily:'monospace',fontSize:'10px',color:'#3c2d1e',backgroundColor:'#fff5df',padding:{x:3,y:2}}).setOrigin(.5).setDepth(p.y+11)}
+        remote={sprite:this.add.image(p.x,p.y,p.avatar).setDepth(p.y+10),label:this.add.text(p.x,p.y-27,p.nickname,{fontFamily:'monospace',fontSize:'10px',color:'#3c2d1e',backgroundColor:'#fff5df',padding:{x:3,y:2}}).setOrigin(.5).setDepth(p.y+11),avatar:p.avatar,phase:characterPhase(p.id),movingUntil:0}
         this.remotes.set(p.id,remote)
       }
-      this.tweens.killTweensOf(remote.sprite)
-      this.tweens.add({targets:remote.sprite,x:p.x,y:p.y,duration:115,onUpdate:()=>{remote!.label.setPosition(remote!.sprite.x,remote!.sprite.y-27);remote!.sprite.setDepth(remote!.sprite.y+10);remote!.label.setDepth(remote!.sprite.y+11)}})
+      if(Math.hypot(p.x-remote.sprite.x,p.y-remote.sprite.y)>.5){
+        remote.movingUntil=this.time.now+200
+        this.tweens.killTweensOf(remote.sprite)
+        this.tweens.add({targets:remote.sprite,x:p.x,y:p.y,duration:115,onUpdate:()=>{remote!.label.setPosition(remote!.sprite.x,remote!.sprite.y-27);remote!.sprite.setDepth(remote!.sprite.y+10);remote!.label.setDepth(remote!.sprite.y+11)}})
+      }
     }
+  }
+  private makeBubble(sprite:Phaser.GameObjects.Image,text:string){
+    const reaction=reactionOptions.find(option=>option.emoji===text)
+    if(reaction)return this.add.image(sprite.x,sprite.y-53,`reaction-${reaction.id}`).setDepth(900)
+    return this.add.text(sprite.x,sprite.y-53,text.slice(0,32),{fontFamily:'monospace',fontSize:'10px',color:'#3c281e',backgroundColor:'#fff6de',padding:{x:6,y:4},wordWrap:{width:140}}).setOrigin(.5).setDepth(900)
+  }
+  showStaffBubble(text:string){
+    if(!this.cashier)return
+    this.cashierBubbleTimer?.remove(false)
+    this.cashierBubble?.destroy()
+    // Staff messages come from the server-verified chat role, not a visitor ID.
+    const message=text.slice(0,160)
+    this.cashierBubble=this.add.text(this.cashier.x,this.cashier.y-37,message,{
+      fontFamily:'monospace',fontSize:'10px',color:'#3c281e',backgroundColor:'#fff6de',
+      padding:{x:6,y:4},wordWrap:{width:200,useAdvancedWrap:true},
+    }).setOrigin(.5,1).setDepth(900)
+    this.cashierBubbleTimer=this.time.delayedCall(Math.min(12000,Math.max(5000,message.length*60)),()=>{
+      this.cashierBubble?.destroy()
+      this.cashierBubble=undefined
+      this.cashierBubbleTimer=undefined
+    })
   }
   showBubble(id:string,text:string){
     if(id===this.selfId && this.self){
       this.selfBubble?.destroy()
       const sprite=this.self.sprite
-      const bubble=this.add.text(sprite.x,sprite.y-53,text.slice(0,32),{fontFamily:'monospace',fontSize:'10px',color:'#3c281e',backgroundColor:'#fff6de',padding:{x:6,y:4},wordWrap:{width:140}}).setOrigin(.5).setDepth(900)
+      const bubble=this.makeBubble(sprite,text)
       this.selfBubble=bubble
       this.time.delayedCall(3500,()=>{if(this.selfBubble===bubble)this.selfBubble=undefined;bubble.destroy()})
       return
@@ -220,7 +317,7 @@ class StoreScene extends Phaser.Scene {
     const target=this.remotes.get(id)
     if(!target)return
     target.bubble?.destroy()
-    const bubble=this.add.text(target.sprite.x,target.sprite.y-53,text.slice(0,32),{fontFamily:'monospace',fontSize:'10px',color:'#3c281e',backgroundColor:'#fff6de',padding:{x:6,y:4},wordWrap:{width:140}}).setOrigin(.5).setDepth(900)
+    const bubble=this.makeBubble(target.sprite,text)
     target.bubble=bubble
     this.time.delayedCall(3500,()=>{if(target.bubble===bubble)target.bubble=undefined;bubble.destroy()})
   }
@@ -229,5 +326,5 @@ export function createGame(el:HTMLElement,opts:Options):StoreGame{
   const scene=new StoreScene(opts)
   const game=new Phaser.Game({type:Phaser.AUTO,parent:el,width:W,height:H,backgroundColor:'#d0a377',pixelArt:true,
     scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH,width:W,height:H},scene:[scene],render:{antialias:false}})
-  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)}}
+  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value)}
 }

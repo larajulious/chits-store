@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "nuxt dev --host 0.0.0.0",
+    "start": "node scripts/start.mjs",
     "build": "nuxt build",
     "typecheck": "nuxt typecheck",
-    "test": "node --test tests/public-foundation.test.mjs",
+    "test": "node --test tests/public-foundation.test.mjs tests/production-start.test.mjs tests/feedback.test.mjs",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
     "setup": "node scripts/setup.mjs"

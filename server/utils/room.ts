@@ -1,4 +1,6 @@
 import { activeVisitor, getVisitor, publicOrder, type OrderRow } from './db'
+import { randomUUID } from 'node:crypto'
+import type { ChatMessage, AdminChatState } from '../../shared/chat'
 
 type Connection = {
   id: string
@@ -19,6 +21,17 @@ const members = new Map<string, Connection>()
 const interactions=new Map<number,{lastChat:number;chatWindowStart:number;chatCount:number}>()
 const serialize = (x: unknown) => JSON.stringify(x)
 let chatEnabled = true
+const chatHistory:ChatMessage[]=[]
+export function publishChat(message:Omit<ChatMessage,'messageId'>){
+  const entry={...message,messageId:randomUUID()}
+  chatHistory.push(entry)
+  if(chatHistory.length>50)chatHistory.splice(0,chatHistory.length-50)
+  broadcast({type:'chat',...entry})
+}
+export function adminChatState():AdminChatState{
+  if(pruneExpired())broadcast({type:'players',players:playerList()})
+  return {messages:[...chatHistory],chatEnabled,online:members.size}
+}
 export function authorized(p:Connection){return Date.now()<p.expiresAt&&activeVisitor(getVisitor(p.visitorId))}
 function pruneExpired(){
   let changed=false

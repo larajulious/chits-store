@@ -6,13 +6,21 @@ A cozy multiplayer bakery prototype, built in one **Nuxt + Phaser + SQLite** pro
 
 - **No invitations, order-based authentication, or private customer links.**
 - Public home page lets anyone select a food-inspired avatar and immediately enter.
+- The structured pixel layout is the only public layout at `/` and `/store`; no preview query parameter is needed.
 - A generated guest nickname (`Mochi #001`, etc.) avoids requiring usernames or accounts.
 - A browser session represents one public visitor; returning visitors can choose a different avatar.
 - WebSocket multiplayer and chat now authenticate public visitor sessions, not orders.
-- Public order board shows **only order numbers and Preparing/Ready/Served statuses**.
-- Removed **My Order**, personal Ready notices, and automatic ejection when an order is served, because public visitors are not linked to a particular order.
+- Public order board shows **only order numbers and Preparing/Ready/Out for Delivery/Delivered statuses**. The in-game Live Orders board lists up to five most recent Out for Delivery orders; the Orders panel keeps the full public feed. Orders remain active through Out for Delivery; Delivered orders remain on the public board for five minutes and in admin history.
+- Removed **My Order**, personal Ready notices, and automatic ejection when an order goes out for delivery, because public visitors are not linked to a particular order.
 - Admin still logs in, creates orders, and advances statuses. No customer links are generated.
 - Staff have optional Community Moderation controls: disable chat, temporary mute and kick.
+- The admin dashboard includes Customer chat: read visitor messages and reply as verified staff in the same public Community Chat. Messages are limited to 160 characters; the latest 50 are temporary and clear on server restart. Pausing public chat also pauses staff sends.
+- Visitors can tap the pixel feedback box near the entrance or the Feedback action to send a suggestion or review (up to 500 characters). Staff approve/reject submissions in **Customer feedback** and can hide published posts. Only approved posts appear publicly, for **10 hours after approval**; expiry persists across restarts and posts disappear from an open board automatically.
+- Feedback is stored locally in an additive SQLite table. Pending/rejected/expired records are retained privately; visibility expiry does not delete them. Public and staff lists show up to 50 posts per queue. Submission limits are three per visitor per hour, at least one minute apart, plus ten per address per hour.
+- The Leave button asks for confirmation. Confirming returns to the welcome screen with “Thank you for visiting Chits Meryenda Hub!”; cancelling keeps the visit connected.
+- In-store food characters gently breathe and blink while idle, with a small squash, bounce and lean while walking. Cosmetic motion respects the browser’s reduced-motion preference and does not change game positions.
+- Staff messages also appear as temporary speech bubbles above the in-game cashier for connected customers; the full messages remain in Community Chat.
+- On desktop, the dashboard shows order creation and a filtered order queue alongside customer chat. Preparing, Ready, Out for Delivery and Delivered counts reflect the most recent 100 orders; The queue opens on Preparing and offers Preparing, Ready, Out for Delivery and Delivered filters. Use Mark delivered on an Out for Delivery order, confirm receipt, then find completed orders under Delivered. Smaller screens use a stacked layout.
 - Original `/enter/:token` links redirect to the public entrance for compatibility.
 
 ## Setup on macOS
@@ -35,7 +43,7 @@ npm run build
 npm test
 ```
 
-The integration suite uses a temporary SQLite database and test configuration. The old invitation-only test is retained as historical coverage and skipped; `npm test` selects the public visitor suite.
+The integration suites use temporary SQLite databases and test configuration. The old invitation-only test is retained as historical coverage and skipped; `npm test` runs public visitor and production-start coverage.
 
 URLs:
 
@@ -48,10 +56,40 @@ URLs:
 1. Open home page and choose an avatar. You should enter without any order number.
 2. Open another browser profile and join with another avatar. Check movement and chat.
 3. Login at `/admin`; create `CH-1025`. Verify it appears under Preparing for both visitors.
-4. Set Ready and Served. Both visitors should see status updates; neither is kicked out.
+4. Set Ready, Out for Delivery, then Delivered. Both visitors should see status updates; neither is kicked out.
 5. Refresh one browser, return through avatar selection and confirm no invitation is needed.
 6. Test moderation controls: temporarily disable chat and mute/kick a visitor.
 7. Check mobile portrait layout, joystick, chat, and cashier/chef interactions.
+
+## Running on a VPS
+
+Keep the existing `.env` and `.data`; do not run setup again. Install dependencies and build **on the VPS with Node.js 24+** so `better-sqlite3` uses the correct operating-system/Node binary. Copying a macOS `node_modules` or `.output/server/node_modules` directory to Linux can break SQLite when the first visitor joins.
+
+From the project directory, after updating the project files:
+
+```bash
+npm ci
+npm run build
+npm start
+```
+
+`npm start` loads the existing `.env` and checks the signing key/admin hash before listening. Process-manager environment variables take precedence. It enforces production mode even if the local `.env` contains `NODE_ENV=development`. The raw `node .output/server/index.mjs` command does not automatically load `.env`; a missing signing key can otherwise leave the home page working while entry returns HTTP 500.
+
+Keep your assigned `HOST`/`PORT` (or `NITRO_HOST`/`NITRO_PORT`) and existing reverse proxy configuration. Use HTTPS for browser entry: production session cookies are Secure. `SQLITE_PATH` must point to the persistent database, and the process user needs write access to its directory for SQLite/WAL files.
+
+For PM2, edit `cwd` and the assigned port in `deploy/pm2.ecosystem.cjs` to match the installation. That example now uses the same launcher, in one fork process. Apply the updated configuration:
+
+```bash
+pm2 startOrReload deploy/pm2.ecosystem.cjs --only chits-store --update-env
+pm2 logs chits-store --lines 40 --nostream
+```
+
+If entry still fails, identify the error in those logs before changing configuration:
+
+- `SESSION_SECRET`/`ADMIN_PASSWORD_HASH`: verify the existing values are loaded; keep the original credentials.
+- `invalid ELF header`, `NODE_MODULE_VERSION`, missing bindings: reinstall dependencies and rebuild on the VPS under the Node version used to run the app.
+- `SQLITE_CANTOPEN`, `SQLITE_READONLY`, permission denied: check the persistent path and database-directory ownership for the process user.
+- `Invalid request origin` (403): match `PUBLIC_ORIGIN` to the exact HTTPS site origin and preserve the browser Host header through Nginx. Keep origin checks enabled.
 
 ## Architecture
 

@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import type {OrderStatus} from '../../shared/order-status'
 
-export type Status = 'Preparing' | 'Ready' | 'Served'
+export type Status = OrderStatus
 export type VisitorRow = {
   id: number
   avatar_key: string
@@ -14,13 +15,14 @@ export type VisitorRow = {
 export type OrderRow = {
   id: number
   order_number: string
-  status: Status
+  status: Exclude<Status,'Delivered'>
   token_hash: string
   nickname: string | null
   avatar_key: string | null
   created_at: number
   updated_at: number
   served_at: number | null
+  delivered_at: number | null
   revoked_at: number | null
 }
 
@@ -43,6 +45,7 @@ export function db() {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         served_at INTEGER,
+        delivered_at INTEGER,
         revoked_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS orders_status_idx ON orders(status, updated_at);
@@ -53,11 +56,30 @@ export function db() {
         last_seen_at INTEGER NOT NULL,
         revoked_at INTEGER
       );
+      CREATE TABLE IF NOT EXISTS feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        visitor_id INTEGER NOT NULL,
+        nickname TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('suggestion','review')),
+        text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 500),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+        created_at INTEGER NOT NULL,
+        approved_at INTEGER,
+        expires_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS feedback_public_idx ON feedback(status, expires_at, approved_at);
+      CREATE INDEX IF NOT EXISTS feedback_visitor_idx ON feedback(visitor_id, created_at);
     `)
+    // Add completion without rebuilding legacy tables or changing their status CHECK.
+    const connection=database
+    connection.transaction(()=>{
+      const columns=connection.pragma('table_info(orders)') as {name:string}[]
+      if(!columns.some(column=>column.name==='delivered_at'))connection.exec('ALTER TABLE orders ADD COLUMN delivered_at INTEGER')
+    }).immediate()
   }
   return database
 }
 export const getOrder = (id: number) => db().prepare('SELECT * FROM orders WHERE id = ?').get(id) as OrderRow | undefined
 export const getVisitor = (id: number) => db().prepare('SELECT * FROM visitors WHERE id = ?').get(id) as VisitorRow | undefined
 export const activeVisitor = (visitor: VisitorRow | undefined) => Boolean(visitor && !visitor.revoked_at && Date.now() - visitor.last_seen_at < 7 * 24 * 60 * 60_000)
-export const publicOrder = (row: OrderRow) => ({ id: row.id, number: row.order_number, status: row.status })
+export const publicOrder = (row: OrderRow) => ({ id: row.id, number: row.order_number, status:row.status==='Served'&&row.delivered_at!=null?'Delivered' as const:row.status })

@@ -16,9 +16,10 @@ test('public bakery foundation (isolated built server)',{timeout:60_000},async t
   const sqlite=join(dir,'test.sqlite')
   // Start with the v0.1 schema and a stored order to exercise additive migration.
   let db=new Database(sqlite)
-  db.exec(`CREATE TABLE orders(id INTEGER PRIMARY KEY AUTOINCREMENT,order_number TEXT NOT NULL UNIQUE,status TEXT NOT NULL DEFAULT 'Preparing',token_hash TEXT NOT NULL UNIQUE,nickname TEXT,avatar_key TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,served_at INTEGER,revoked_at INTEGER);`)
+  db.exec(`CREATE TABLE orders(id INTEGER PRIMARY KEY AUTOINCREMENT,order_number TEXT NOT NULL UNIQUE,status TEXT NOT NULL DEFAULT 'Preparing' CHECK(status IN ('Preparing','Ready','Served')),token_hash TEXT NOT NULL UNIQUE,nickname TEXT,avatar_key TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,served_at INTEGER,revoked_at INTEGER);`)
   db.prepare('INSERT INTO orders(order_number,token_hash,nickname,created_at,updated_at) VALUES(?,?,?,?,?)').run('LEGACY-100','legacy-hash','LegacyNickname',100,100)
   const legacy=db.prepare('SELECT * FROM orders WHERE id=1').get()
+  db.prepare('INSERT INTO orders(order_number,status,token_hash,created_at,updated_at,served_at) VALUES(?,?,?,?,?,?)').run('LEGACY-OUT','Served','legacy-out-hash',100,100,100)
   db.close()
   const reserve=createServer();reserve.listen(0,'127.0.0.1');await once(reserve,'listening')
   const port=reserve.address().port;await new Promise(resolve=>reserve.close(resolve))
@@ -63,6 +64,7 @@ test('public bakery foundation (isolated built server)',{timeout:60_000},async t
       ws.once('open',()=>{ws.terminate();reject(new Error('Unauthorized upgrade'))})
     });assert.equal(code,status)
   }
+  function assertLegacy(){const {delivered_at,...fields}=db.prepare('SELECT * FROM orders WHERE id=1').get();assert.equal(delivered_at,null);assert.deepEqual(fields,legacy)}
   let admin,one,two,idOne,idTwo,a,b,aid,bid,order
   await t.test('anonymous board is safe, orders stay protected, and old records survive',async()=>{
     const board=await req('/api/orders/board');assert.equal(board.status,200)
@@ -71,7 +73,7 @@ test('public bakery foundation (isolated built server)',{timeout:60_000},async t
     assert.equal((await req('/api/me')).status,401)
     assert.equal((await req('/api/admin/orders')).status,401)
     assert.equal((await req('/api/admin/room')).status,401)
-    db=new Database(sqlite);assert.deepEqual(db.prepare('SELECT * FROM orders WHERE id=1').get(),legacy)
+    db=new Database(sqlite);assertLegacy()
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='visitors'").get())
   })
   await t.test('public avatar entry needs no order and returns signed visitor sessions',async()=>{
@@ -123,20 +125,83 @@ test('public bakery foundation (isolated built server)',{timeout:60_000},async t
     a.ws.send(JSON.stringify({type:'chat',text:'Hello Boba'}));await wait(b,m=>m.type==='chat'&&m.text==='Hello Boba')
     b.ws.send(JSON.stringify({type:'chat',text:'Hello Mochi'}));await wait(a,m=>m.type==='chat'&&m.text==='Hello Mochi')
   })
-  await t.test('staff create orders without links; Ready and Served update both visitors without ejecting them',async()=>{
+  await t.test('staff create orders; Ready, Out for Delivery and Delivered update both visitors without ejection',async()=>{
     const login=await req('/api/admin/login',{method:'POST',body:{password}});assert.equal(login.status,200);admin=cookieOf(login)
     assert.equal((await req('/api/me',{cookie:admin})).status,401)
     const created=await req('/api/admin/orders',{method:'POST',cookie:admin,body:{number:'PUBLIC-1001'}});assert.equal(created.status,200)
     const result=await created.json();assert.equal('link' in result,false);order=result.order
     assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:admin,body:{status:'Served'}})).status,400)
-    for(const status of ['Ready','Served']){
+    assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:admin,body:{status:'Delivered'}})).status,400)
+    for(const status of ['Ready','Served','Delivered']){
+      if(status==='Served')assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:admin,body:{status:'Delivered'}})).status,400)
       assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:admin,body:{status}})).status,200)
       await wait(a,m=>m.type==='order_changed'&&m.order.id===order.id&&m.order.status===status)
       await wait(b,m=>m.type==='order_changed'&&m.order.id===order.id&&m.order.status===status)
     }
     assert.equal(a.closed,false);assert.equal(b.closed,false)
     assert.equal(a.inbox.some(m=>m.type==='my_order_changed'),false)
-    assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:admin,body:{status:'Ready'}})).status,400)
+    const completed=db.prepare('SELECT * FROM orders WHERE id=?').get(order.id)
+    assert.equal(completed.status,'Served');assert.ok(completed.delivered_at>=completed.served_at)
+    assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:one,body:{status:'Delivered'}})).status,401)
+    assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:admin,body:{status:'Delivered'},headers:{Origin:'https://attacker.example'}})).status,403)
+    assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:admin,body:{status:'Delivered'}})).status,200)
+    assert.deepEqual(db.prepare('SELECT * FROM orders WHERE id=?').get(order.id),completed)
+    for(const status of ['Preparing','Ready','Served',null,undefined,'invalid'])assert.equal((await req(`/api/admin/orders/${order.id}`,{method:'PATCH',cookie:admin,body:{status}})).status,400)
+  })
+  await t.test('legacy Out for Delivery orders stay active; only Delivered has a five-minute board window',async()=>{
+    const list=await req('/api/orders/board').then(r=>r.json())
+    assert.equal(list.find(row=>row.number==='LEGACY-OUT').status,'Served')
+    const legacyOut=db.prepare("SELECT * FROM orders WHERE order_number='LEGACY-OUT'").get()
+    assert.equal(legacyOut.served_at,100);assert.equal(legacyOut.delivered_at,null)
+    const changed=await req(`/api/admin/orders/${legacyOut.id}`,{method:'PATCH',cookie:admin,body:{status:'Delivered'}})
+    assert.equal(changed.status,200);assert.equal((await changed.json()).order.status,'Delivered')
+    assert.equal(db.prepare('SELECT served_at FROM orders WHERE id=?').get(legacyOut.id).served_at,100)
+    assert.equal((await req('/api/orders/board').then(r=>r.json())).find(row=>row.id===legacyOut.id).status,'Delivered')
+    db.prepare('UPDATE orders SET delivered_at=? WHERE id=?').run(Date.now()-5*60_000-1,legacyOut.id)
+    assert.equal((await req('/api/orders/board').then(r=>r.json())).some(row=>row.id===legacyOut.id),false)
+    assert.equal((await req('/api/admin/orders',{cookie:admin}).then(r=>r.json())).find(row=>row.id===legacyOut.id).status,'Delivered')
+    assertLegacy()
+  })
+  await t.test('admin chat requires staff scope and validates origin and message input',async()=>{
+    assert.equal((await req('/api/admin/chat')).status,401)
+    assert.equal((await req('/api/admin/chat',{cookie:one})).status,401)
+    assert.equal((await req('/api/admin/chat',{method:'POST',cookie:one,body:{text:'Not staff'}})).status,401)
+    assert.equal((await req('/api/admin/chat',{method:'POST',cookie:admin,body:{text:'Bad origin'},headers:{Origin:'https://attacker.example'}})).status,403)
+    for(const text of [undefined,{},[],42,'   ','\u0000','x'.repeat(161)]){
+      assert.equal((await req('/api/admin/chat',{method:'POST',cookie:admin,body:{text}})).status,400)
+    }
+    assert.equal((await req('/api/admin/chat',{method:'POST',cookie:admin,body:{text:'x'.repeat(5000)}})).status,413)
+    const state=await req('/api/admin/chat',{cookie:admin})
+    assert.match(state.headers.get('cache-control'),/no-store/)
+    const history=await state.json()
+    assert.equal(history.online,2)
+    assert.equal(history.messages.some(m=>m.text==='Hello Boba'&&m.role==='visitor'),true)
+  })
+  await t.test('staff and visitors share chat with verified sender roles and rate limits',async()=>{
+    const text='Staff says: <b>Hello everyone</b>!'
+    const sent=await req('/api/admin/chat',{method:'POST',cookie:admin,body:{text:` ${text}\u0000 `,nickname:'Impersonated name',role:'visitor'}})
+    assert.equal(sent.status,200)
+    const first=await wait(a,m=>m.type==='chat'&&m.text===text)
+    const second=await wait(b,m=>m.type==='chat'&&m.text===text)
+    assert.equal(first.role,'staff');assert.equal(first.nickname,'Chits Store');assert.equal(first.id,'staff')
+    assert.equal(first.messageId,second.messageId)
+    const state=await sent.json()
+    assert.equal(state.online,2)
+    assert.equal(state.messages.at(-1).messageId,first.messageId)
+    assert.equal((await req('/api/admin/chat',{method:'POST',cookie:admin,body:{text:'Too fast'}})).status,429)
+    await delay(1550)
+    a.ws.send(JSON.stringify({type:'chat',text:'Customer reply',role:'staff',nickname:'Chits Store'}))
+    const reply=await wait(b,m=>m.type==='chat'&&m.text==='Customer reply')
+    assert.equal(reply.role,'visitor');assert.equal(reply.id,aid);assert.notEqual(reply.nickname,'Chits Store')
+    const snapshot=await req('/api/admin/chat',{cookie:admin}).then(r=>r.json())
+    assert.equal(snapshot.messages.some(m=>m.messageId===reply.messageId&&m.text==='Customer reply'),true)
+  })
+  await t.test('paused public chat also blocks staff messages',async()=>{
+    assert.equal((await req('/api/admin/room',{method:'POST',cookie:admin,body:{action:'toggle_chat',enabled:false}})).status,200)
+    assert.equal((await req('/api/admin/chat',{cookie:admin}).then(r=>r.json())).chatEnabled,false)
+    assert.equal((await req('/api/admin/chat',{method:'POST',cookie:admin,body:{text:'Paused staff message'}})).status,403)
+    assert.equal(a.inbox.some(m=>m.text==='Paused staff message'),false)
+    assert.equal((await req('/api/admin/room',{method:'POST',cookie:admin,body:{action:'toggle_chat',enabled:true}})).status,200)
   })
   await t.test('staff chat switch, mute, unmute and kick work',async()=>{
     async function moderate(body){const r=await req('/api/admin/room',{method:'POST',cookie:admin,body});assert.equal(r.status,200);return r.json()}
@@ -172,6 +237,6 @@ test('public bakery foundation (isolated built server)',{timeout:60_000},async t
     for(let i=0;i<15;i++)assert.equal((await req('/api/visitors/join',{method:'POST',cookie:two,body:{avatar:'boba'},headers:{'X-Real-IP':'192.0.2.1'}})).status,200)
     assert.equal((await req('/api/visitors/join',{method:'POST',cookie:two,body:{avatar:'boba'},headers:{'X-Real-IP':'192.0.2.1'}})).status,429)
     assert.equal((await req('/api/visitors/join',{method:'POST',cookie:two,body:{avatar:'boba'},headers:{'X-Real-IP':'192.0.2.2'}})).status,200)
-    assert.deepEqual(db.prepare('SELECT * FROM orders WHERE id=1').get(),legacy)
+    assertLegacy()
   })
 })

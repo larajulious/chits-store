@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Player, BoardOrder, StoreGame } from '../../game/createGame'
-const props=defineProps<{nickname:string;avatar:string;players:Player[];selfId:string;board:BoardOrder[];controlsEnabled?:boolean}>()
+const props=defineProps<{nickname:string;avatar:string;players:Player[];selfId:string;board:BoardOrder[];catEnabled?:boolean;guideEnabled?:boolean;controlsEnabled?:boolean}>()
 const emit=defineEmits<{(e:'move',pos:{x:number;y:number}):void;(e:'interact',kind:string):void;(e:'cat-hint'):void}>()
 const target=ref<HTMLElement>()
 let api:StoreGame|undefined
@@ -16,7 +16,7 @@ onMounted(async()=>{
   const {createGame}=await import('../../game/createGame')
   if(disposed||!target.value)return
   motionQuery=window.matchMedia('(prefers-reduced-motion: reduce)')
-  api=createGame(target.value,{nickname:props.nickname,avatar:props.avatar as any,onMove:(x,y)=>emit('move',{x,y}),onInteract:kind=>emit('interact',kind),onCatHint:()=>emit('cat-hint'),reducedMotion:motionQuery.matches,controlsEnabled:props.controlsEnabled!==false})
+  api=createGame(target.value,{nickname:props.nickname,avatar:props.avatar as any,onMove:(x,y)=>emit('move',{x,y}),onInteract:kind=>emit('interact',kind),onCatHint:()=>emit('cat-hint'),catEnabled:props.catEnabled,guideEnabled:props.guideEnabled,reducedMotion:motionQuery.matches,controlsEnabled:props.controlsEnabled!==false})
   motionQuery.addEventListener('change',motionChanged)
   document.addEventListener('visibilitychange',visibilityChanged)
   visibilityChanged()

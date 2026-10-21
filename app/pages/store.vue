@@ -4,6 +4,11 @@ import { isAvatar } from '../../shared/avatars'
 import { reactionOptions } from '../../shared/reactions'
 import { orderStatusLabels,type OrderStatus } from '../../shared/order-status'
 import type { ChatMessage } from '../../shared/chat'
+const route=useRoute()
+const featureConfig=useRuntimeConfig().public
+// Runtime flags can disable a feature for everyone; query switches isolate one browser for profiling.
+const catEnabled=computed(()=>String(featureConfig.storeCatEnabled)!=='false'&&route.query.cat!=='0')
+const guideEnabled=computed(()=>String(featureConfig.storeGuideEnabled)!=='false'&&route.query.guide!=='0')
 type Status = OrderStatus
 type PublicOrder = { id:number; number:string; status:Status }
 type MenuState = { date:string; version:string; items:{id:number;name:string;priceCentavos:number}[] }
@@ -161,7 +166,7 @@ async function leave(){
     <div v-if="notice" class="row between structured-notice" style="padding:10px;background:#e7f3d4"><strong style="font-size:.85rem">{{ notice }}</strong><button class="btn small secondary" aria-label="Dismiss notice" @click="notice=''">✕</button></div>
     <div class="bakery-status-strip"><span>INSIDE THE MERYENDA HUB</span><div><span>{{ preparing }} preparing</span><span class="ready-count">{{ ready }} ready</span></div></div>
     <div class="game-stage">
-      <ClientOnly><GameCanvas ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :controls-enabled="!overlay&&!leaving" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact" @cat-hint="notice='Walk closer to Miming to pet the cat.'"/></ClientOnly>
+      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact" @cat-hint="notice='Walk closer to Miming to pet the cat.'"/></ClientOnly>
     </div>
     <nav class="structured-actions" aria-label="Store actions">
       <button type="button" @click="overlay='chat'"><StoreGlyph name="chat"/><span>Chat</span></button>
@@ -171,7 +176,7 @@ async function leave(){
       <button type="button" @click="overlay='feedback'"><StoreGlyph name="feedback"/><span>Feedback</span></button>
       <button type="button" @click="leaveDialog?.open()"><StoreGlyph name="door"/><span>Leave</span></button>
     </nav>
-    <div class="help-text structured-hint" style="background:#fff7e8;text-align:center;padding-bottom:9px"><span>Drag yarn · tap Miming to pet</span><button type="button" class="yarn-toss" :disabled="!!overlay" @click="petCat">Pet cat</button><button type="button" class="yarn-toss" aria-label="Toss yarn for Miming the shop cat" :disabled="!!overlay" @click="game?.tossYarn()">Toss yarn</button></div>
+    <div v-if="catEnabled" class="help-text structured-hint" style="background:#fff7e8;text-align:center;padding-bottom:9px"><span>Drag yarn · tap Miming to pet</span><button type="button" class="yarn-toss" :disabled="!!overlay" @click="petCat">Pet cat</button><button type="button" class="yarn-toss" aria-label="Toss yarn for Miming the shop cat" :disabled="!!overlay" @click="game?.tossYarn()">Toss yarn</button></div>
     <div v-if="overlay" class="overlay-shade" @click.self="overlay=''">
       <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback'}" role="dialog" aria-labelledby="store-dialog-title">
         <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ {chat:'Community Chat',menu:"Today's Menu",board:'Live Order Board',cashier:'Cashier',chef:'Chef',seat:'Take a Seat',emotes:'Reactions',feedback:'Feedback box'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>

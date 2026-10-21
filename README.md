@@ -93,6 +93,10 @@ pm2 startOrReload deploy/pm2.ecosystem.cjs --only chits-store --update-env
 pm2 logs chits-store --lines 40 --nostream
 ```
 
+For a temporary character performance comparison, enter the store and open `/store?cat=0&guide=0` (neither), `/store?guide=0` (cat only), `/store?cat=0` (guide only), or `/store` (both). For a site-wide temporary switch, set `NUXT_PUBLIC_STORE_CAT_ENABLED=false` and/or `NUXT_PUBLIC_STORE_GUIDE_ENABLED=false` in the PM2 environment and reload with `--update-env`; remove the override to restore the default. This does not change the database or admin credentials. See the [character regression investigation](docs/CHARACTER_REGRESSION_AUDIT.md) for measurements and remaining VPS checks.
+
+If a browser reports `ERR_HTTP2_PING_FAILED` or a dynamically imported `/_nuxt/*.js` module fails, inspect that exact asset request and matching proxy logs. The app now reloads once after a chunk load error, but repeated failures need the deployed asset, compression, cache and HTTP/2 path fixed. Keep old hashed assets available until existing browser sessions have moved to the new build.
+
 If entry still fails, identify the error in those logs before changing configuration:
 
 - `SESSION_SECRET`/`ADMIN_PASSWORD_HASH`: verify the existing values are loaded; keep the original credentials.

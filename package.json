@@ -1,0 +1,31 @@
+{
+  "name": "chits-store",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --host 0.0.0.0",
+    "build": "nuxt build",
+    "typecheck": "nuxt typecheck",
+    "test": "node --test tests/public-foundation.test.mjs",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "setup": "node scripts/setup.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "h3": "^1.15.4",
+    "nuxt": "4.5.2",
+    "phaser": "3.90.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.3.13",
+    "ws": "^8.22.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

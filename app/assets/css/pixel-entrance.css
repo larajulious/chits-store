@@ -1,0 +1,18 @@
+.structured-lobby{font-family:'Courier New',monospace;background-color:#f6efdf;background-image:linear-gradient(#ddc8a01a 1px,transparent 1px),linear-gradient(90deg,#ddc8a01a 1px,transparent 1px);background-size:8px 8px;--line:#d9c09a}
+.lobby-brand strong,.lobby-welcome h1,.buddy-panel-heading h2,.enter-bakery,.lobby-eyebrow,.buddy-name{font-family:Silkscreen,monospace;font-weight:400;letter-spacing:0}
+.lobby-header,.lobby-footer{border-color:#c2a67e}.brand-mark{border:2px solid #ad875c;border-radius:0;background:#ecdbb6;box-shadow:3px 3px 0 #d6b78b}
+.lobby-brand strong{font-size:13px;white-space:nowrap}.lobby-brand div>span{color:#80694f}.welcome-tag,.buddy-count{border:1px solid #9ba578;border-radius:0;background:#e3e5c6;color:#65734f}
+.lobby-welcome h1{font-size:clamp(28px,3.2vw,42px);line-height:1.3;letter-spacing:-1px}.lobby-welcome h1 em{font-style:normal;color:#97613e}.welcome-copy{color:#80694f}
+.bakery-scene{border:2px solid #ad875c;border-radius:0;background:#ebd9b6;box-shadow:4px 4px 0 #d6b78b}
+.bakery-scene .welcome-store,.bakery-scene .store-door,.bakery-scene .store-sign{border-radius:0}.bakery-scene .store-sign,.bakery-scene .store-door,.bakery-scene .store-window{animation:none}
+.buddy-panel{border:2px solid #987047;border-radius:0;background:#fff5df;box-shadow:5px 5px 0 #d2b186,inset 3px 3px 0 #fffbed}
+.buddy-panel-heading h2{font-size:17px;line-height:1.5}.buddy-description{color:#80694f}.buddy-count{border-color:#c1a17a;background:#f2e4c8;color:#80694f}
+.buddy-choice{border:2px solid #d1b488;border-radius:0;background:#f5e8cd;box-shadow:2px 2px 0 #dfc69d;transition:none;padding:12px 3px 8px}
+.buddy-choice.selected{border:2px solid #85603c;border-radius:0;background:#e7d19f;box-shadow:2px 2px 0 #a27b4a,inset 2px 2px 0 #f9e7bb}
+.buddy-name{font-size:9px}.selection-check{border-radius:0;background:#85603c}.selected-portrait{border:1px solid #c1a17a;border-radius:0;background:#f0dfbb}.buddy-selection{border-color:#d2b48a}
+.enter-bakery{border:2px solid #674731;border-radius:0;background:#98704b;font-size:12px;box-shadow:3px 3px 0 #674731,inset 2px 2px 0 #b99068}.enter-bakery:hover{background:#86603e}.enter-bakery:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #674731}
+.entry-note,.lobby-footer{color:#8b7357}.carousel-hint{font-size:11px}
+@media(max-width:1100px){.lobby-welcome h1{font-size:32px}}
+@media(max-width:900px){.lobby-welcome h1{font-size:24px}.buddy-panel-heading h2{font-size:15px}.lobby-brand strong{font-size:11px}.buddy-name{font-size:9px}.bakery-scene,.buddy-panel{border-radius:0}.welcome-tag{font-size:9px}}
+@media(max-width:600px){.lobby-welcome h1{font-size:clamp(17px,4.8vw,23px);line-height:1.4;letter-spacing:-.6px}.buddy-panel-heading h2{font-size:15px}.buddy-grid{grid-auto-columns:88px}.buddy-choice{border-radius:0;min-height:92px}.buddy-name{font-size:9px}.buddy-description{font-size:12px}.bakery-scene .welcome-store,.bakery-scene .store-door{border-radius:0}.lobby-content{gap:20px}}
+@media(max-width:359px){.lobby-brand strong{font-size:10px}.welcome-tag{font-size:8px}.buddy-panel-heading h2{font-size:13px}}

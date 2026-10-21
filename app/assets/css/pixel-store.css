@@ -1,0 +1,39 @@
+/* Scoped to the public store. Integer edges, local lettering, no image filters. */
+.game-shell{--pixel-ink:#674731;--pixel-paper:#fff3da;--pixel-shadow:#b68c61;font-family:'Courier New',monospace;color:#493425;border-radius:0}
+.structured-store{border:3px solid var(--pixel-ink);border-radius:0;background:var(--pixel-paper);box-shadow:6px 6px 0 #bd9c76}
+.structured-store-top,.game-top{background:#fff3da;border-bottom:3px solid var(--pixel-ink)}
+.visitor-identity strong,.game-top strong,.structured-actions,.game-hud .btn,.store-dialog .btn,.store-dialog .section-head,.order-status-heading,.visit-status .pill,.bakery-status-strip{font-family:Silkscreen,monospace;font-weight:400}
+.visitor-identity strong{font-size:12px;letter-spacing:0}.visitor-identity div>span{font-size:12px;color:#755b44}
+.visitor-portrait{border:2px solid #987047;border-radius:0;background:#ecd8b1;box-shadow:2px 2px 0 #d0af7c}
+.game-shell .pill{border-radius:0;background:#e9d0a7;color:#62452d;border:1px solid #b08a5e}
+.game-shell .pill.ready{background:#d3e3b1;color:#3e5939;border-color:#91aa6f}.game-shell .pill.served{background:#e4dac7;color:#746450;border-color:#c0ad90}
+.visit-status .pill{font-size:9px;padding:4px 6px}.visitor-count{font-size:11px;color:#756047}.visitor-count svg{width:16px;height:16px}
+.bakery-status-strip{background:#e9d6af;border-block:0 solid var(--pixel-ink);border-bottom-width:3px;flex-wrap:wrap;row-gap:6px}
+.bakery-status-strip>span{font-size:9px;letter-spacing:0;color:#715236}.bakery-status-strip>div{font-family:'Courier New',monospace;font-size:11px;font-weight:700;color:#715236}
+.structured-actions{background:#f5e5c5;border-top:3px solid var(--pixel-ink);gap:10px;padding:12px 16px}
+.structured-actions button,.structured-actions a{border:2px solid #987047;border-radius:0;background:#f4dfb6;color:#715034;box-shadow:3px 3px 0 #b58b5e,inset 2px 2px 0 #fff4d9;font-size:10px;font-weight:400;transition:none}
+.structured-actions button:hover,.structured-actions a:hover{background:#ead19e;border-color:#674731;color:#493425}
+.structured-actions button:active,.structured-actions a:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #b58b5e}
+.structured-actions svg{width:24px;height:24px}
+.structured-store .structured-hint{background:#f5e5c5!important;color:#7d654c;font-size:10px}
+.structured-notice{border-bottom:2px solid #8a9d67}.structured-notice strong{font-family:'Courier New',monospace}
+.game-shell .overlay-shade{background:#34281bb3;backdrop-filter:none;padding:18px}
+.game-shell .store-dialog{border:0;border-radius:0;background:#fff3da;box-shadow:4px 0 #674731,-4px 0 #674731,0 -4px #674731,0 4px #674731,4px 8px #34281b,inset 0 0 0 2px #e3c597;padding:18px;gap:14px;scrollbar-width:thin;scrollbar-color:#a78053 #ecdabb}
+.game-shell .dialog-header{border-bottom:2px solid #d4b68a;padding-bottom:14px;grid-template-columns:minmax(0,1fr) 36px}
+.game-shell .dialog-header .section-head{font-size:14px;letter-spacing:0;line-height:1.6;color:#674731}
+.game-shell .store-dialog .btn{font-family:Silkscreen,monospace;font-size:11px;font-weight:400;border:2px solid #62412b;border-radius:0;background:#98704b;color:#fff4dd;box-shadow:2px 2px 0 #62412b,inset 2px 2px 0 #b89067;transition:none}
+.game-shell .store-dialog .btn.secondary{background:#eddbb8;color:#674731;border:2px solid #a17b50;box-shadow:2px 2px 0 #a17b50,inset 2px 2px 0 #fff7e5}
+.game-shell .store-dialog .btn:active:not(:disabled){transform:translate(2px,2px);box-shadow:none}
+.game-shell .store-dialog .btn:disabled{opacity:1;background:#e3d4bc;color:#94816a;border-color:#baa68a;box-shadow:2px 2px 0 #baa68a}
+.game-shell .store-dialog .dialog-close{font-family:'Courier New',monospace;font-size:25px;border-radius:0;padding:0}
+.game-shell .store-dialog .input{border:2px solid #b08a5e;border-radius:0;background:#fffbef;color:#493425;box-shadow:inset 2px 2px 0 #ead9ba;font-family:'Courier New',monospace;font-size:13px}
+.game-shell .store-dialog .chat-messages{border:2px solid #c5a678;border-radius:0;background:#f2e4c9;box-shadow:inset 2px 2px 0 #e3cfaa;padding:12px}
+.game-shell .chat-line{font-size:13px;line-height:1.7;padding-bottom:8px;border-bottom:1px dashed #cdb18a}.game-shell .chat-line strong{color:#815438}.chat-empty{font-size:12px;color:#806649}
+.game-shell .store-dialog .privacy{font-family:'Courier New',monospace;font-size:11px;color:#7f684f;line-height:1.6}
+.order-status-group{border:2px solid #c7a576;border-radius:0;background:#f2e4c9;box-shadow:inset 2px 2px 0 #fffae9}
+.order-status-heading{font-size:11px;color:#674731}.order-status-heading>span{border:1px solid #b08a5e;border-radius:0;background:#e3cca3;font-family:'Courier New',monospace}
+.game-shell .order-chips .pill{font-family:'Courier New',monospace;font-size:12px;border-radius:0;padding:6px 8px}
+.game-shell .store-dialog .reaction-choice{font-size:9px;border-radius:0;min-height:88px;gap:12px}.reaction-symbol{width:32px;height:32px;image-rendering:pixelated;flex-shrink:0}
+.game-shell :deep(.game-joystick){border-radius:0;border:3px solid #805a3e;background:#f9e7bba8;box-shadow:3px 3px 0 #67473166}.game-shell :deep(.joystick-knob){border-radius:0;border-width:3px}
+.game-shell button:focus-visible,.game-shell a:focus-visible,.game-shell input:focus-visible{outline:3px solid #617e4d;outline-offset:4px}
+@media(max-width:599px){.structured-store{border:0;box-shadow:none}.game-shell .overlay-shade{padding:16px}.game-shell .store-dialog{padding:16px;gap:12px}.game-shell .dialog-header .section-head{font-size:13px}.structured-actions{padding-inline:14px}.structured-actions button,.structured-actions a{font-size:9px}.bakery-status-strip>div{gap:8px}.game-shell .store-dialog .reaction-choice{font-size:8px}}

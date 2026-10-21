@@ -4,48 +4,86 @@ import { isAvatar } from '../../shared/avatars'
 import { reactionOptions } from '../../shared/reactions'
 import { orderStatusLabels,type OrderStatus } from '../../shared/order-status'
 import type { ChatMessage } from '../../shared/chat'
-import type { MascotSnapshot } from '../../shared/store-mascot'
 type Status = OrderStatus
 type PublicOrder = { id:number; number:string; status:Status }
-type MenuState = { date:string; items:{id:number;name:string;priceCentavos:number}[] }
+type MenuState = { date:string; version:string; items:{id:number;name:string;priceCentavos:number}[] }
 type Me = { nickname:string; avatar:string }
 const me=ref<Me|null>(null), board=ref<PublicOrder[]>([]), players=ref<Player[]>([]), selfId=ref('')
-let latestMascot:MascotSnapshot|null=null
-const menu=ref<MenuState>({date:'',items:[]}),menuLoading=ref(false),menuError=ref('')
-let menuLoadedAt=0
+const menu=ref<MenuState>({date:'',version:'',items:[]}),menuLoading=ref(false),menuError=ref('')
+let menuStale=true,menuEpoch=0,wantedMenuVersion:string|null=null,hasWelcomed=false,hiddenAt=0
 let menuReloadAfterCurrent=false
-const menuDate=computed(()=>menu.value.date?new Date(`${menu.value.date}T12:00:00`).toLocaleDateString('en-PH',{month:'long',day:'numeric'}):'today')
+const menuDate=computed(()=>menu.value.date===manilaDate()?new Date(`${menu.value.date}T12:00:00`).toLocaleDateString('en-PH',{month:'long',day:'numeric'}):'today')
+const hasCurrentMenu=computed(()=>Boolean(menu.value.version&&menu.value.date===manilaDate()))
 const visitorAvatar=computed(()=>isAvatar(me.value?.avatar)?me.value.avatar:'mochi')
 const online=computed(()=>players.value.length)
 const overlay=ref(''), message=ref(''), chat=ref<ChatMessage[]>([]), notice=ref(''), connected=ref(false), returningHome=ref(false), chatEnabled=ref(true)
-const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setMascot:(snapshot:MascotSnapshot)=>void;movePlayer:(id:string,x:number,y:number)=>void}|null>(null)
-watch(game,instance=>{if(instance&&latestMascot)instance.setMascot(latestMascot)})
+const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean|undefined;petCat:()=> 'petted'|'too_far'|'busy'|undefined}|null>(null)
 const leaveDialog=ref<{open:()=>void;close:()=>void}|null>(null),leaving=ref(false)
 const visitThanks=useState<boolean>('visit-thanks',()=>false)
 const feedbackBox=ref<{refresh:()=>Promise<void>}|null>(null)
-let socket:WebSocket|null=null, alive=true, reconnect:ReturnType<typeof setTimeout>|undefined, heartbeat:ReturnType<typeof setInterval>|undefined,boardRefresh:ReturnType<typeof setInterval>|undefined
+let socket:WebSocket|null=null, alive=true, reconnect:ReturnType<typeof setTimeout>|undefined, heartbeat:ReturnType<typeof setInterval>|undefined,boardRefresh:ReturnType<typeof setInterval>|undefined,menuDayTimer:ReturnType<typeof setTimeout>|undefined
 const preparing=computed(()=>board.value.filter(o=>o.status==='Preparing').length)
 const ready=computed(()=>board.value.filter(o=>o.status==='Ready').length)
 const headerTime=computed(()=>new Date().getHours()<12?'Good morning!':new Date().getHours()<18?'Good afternoon!':'Good evening!')
 const statusOptions:Status[]=['Preparing','Ready','Served','Delivered']
 onMounted(async()=>{
-  try { me.value=await $fetch<Me>('/api/me'); await loadBoard(); if(alive){connect();boardRefresh=setInterval(()=>{void loadBoard();if(overlay.value==='menu')void loadMenu()},30_000)} }
+  document.addEventListener('visibilitychange',onVisibilityChanged)
+  scheduleNextMenuDay()
+  try { me.value=await $fetch<Me>('/api/me');void loadMenu();await loadBoard();if(alive){connect();boardRefresh=setInterval(()=>void loadBoard(),30_000)} }
   catch { void returnHome() }
 })
-onBeforeUnmount(()=>{alive=false;clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);socket?.close()})
+onBeforeUnmount(()=>{alive=false;document.removeEventListener('visibilitychange',onVisibilityChanged);clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearTimeout(menuDayTimer);socket?.close()})
 async function loadBoard(){try{board.value=await $fetch<PublicOrder[]>('/api/orders/board')}catch{}}
+function manilaDate(){
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date())
+  const value=(type:string)=>parts.find(part=>part.type===type)?.value
+  return `${value('year')}-${value('month')}-${value('day')}`
+}
+function scheduleNextMenuDay(){
+  clearTimeout(menuDayTimer)
+  const [year,month,day]=manilaDate().split('-').map(Number) as [number,number,number]
+  const next=Date.UTC(year,month-1,day+1)-8*60*60_000+1000
+  menuDayTimer=setTimeout(()=>{
+    menuStale=true;menuEpoch++
+    if(!document.hidden)void loadMenu(true)
+    scheduleNextMenuDay()
+  },Math.max(1000,next-Date.now()))
+}
 async function loadMenu(force=false){
-  if(!force&&menuLoadedAt&&Date.now()-menuLoadedAt<30_000)return
-  if(menuLoading.value)return
+  if(!alive||returningHome.value)return
+  if(!force&&!menuStale&&menu.value.version&&menu.value.date===manilaDate())return
+  if(menuLoading.value){if(force)menuReloadAfterCurrent=true;return}
+  const startedAtEpoch=menuEpoch
   menuLoading.value=true;menuError.value=''
-  try{menu.value=await $fetch<MenuState>('/api/menu/today');menuLoadedAt=Date.now()}
-  catch{menuError.value='Could not load today’s menu. Please try again.'}
-  finally{menuLoading.value=false;if(menuReloadAfterCurrent){menuReloadAfterCurrent=false;void loadMenu(true)}}
+  try{
+    const current=await $fetch<MenuState>('/api/menu/today')
+    if(!alive)return
+    menu.value=current
+    menuStale=(startedAtEpoch!==menuEpoch&&(!wantedMenuVersion||current.version!==wantedMenuVersion))||current.date!==manilaDate()
+    if(!menuStale)wantedMenuVersion=null
+  }catch{menuStale=true;menuError.value='Could not load today’s menu. Please try again.'}
+  finally{
+    menuLoading.value=false
+    if(menuReloadAfterCurrent){menuReloadAfterCurrent=false;if(menuStale&&alive&&!document.hidden)void loadMenu(true)}
+  }
+}
+function onMenuUpdated(version:unknown){
+  const next=typeof version==='string'?version:null
+  if(next&&(next===menu.value.version||next===wantedMenuVersion))return
+  wantedMenuVersion=next;menuStale=true;menuEpoch++
+  if(overlay.value==='menu'&&!document.hidden)void loadMenu(true)
+}
+function onVisibilityChanged(){
+  if(document.hidden){hiddenAt=Date.now();return}
+  if(menuStale||menu.value.date!==manilaDate()||(hiddenAt&&Date.now()-hiddenAt>5000)){
+    menuStale=true;menuEpoch++;void loadMenu(true)
+  }
+  hiddenAt=0
 }
 async function returnHome(){
   if(!alive||returningHome.value)return
   returningHome.value=true
-  clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh)
+  clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearTimeout(menuDayTimer)
   const current=socket;socket=null;current?.close()
   try{const result=await navigateTo('/',{replace:true});if(result===false)window.location.replace('/')}
   catch{window.location.replace('/')}
@@ -58,9 +96,12 @@ function connect(){
   current.onmessage=async evt=>{
     if(returningHome.value)return
     let data:any; try{data=JSON.parse(evt.data)}catch{return}
-    if(data.type==='welcome'){connected.value=true;selfId.value=data.selfId;players.value=data.players||[];latestMascot=data.mascot||null;if(latestMascot)game.value?.setMascot(latestMascot);chatEnabled.value=data.chatEnabled!==false;await loadBoard()}
-    if(data.type==='mascot'){latestMascot=data.mascot;game.value?.setMascot(data.mascot)}
-    if(data.type==='cat_pet_unavailable')notice.value='Walk closer to Miming to pet the cat.'
+    if(data.type==='welcome'){
+      connected.value=true;selfId.value=data.selfId;players.value=data.players||[];chatEnabled.value=data.chatEnabled!==false
+      if(hasWelcomed){menuStale=true;menuEpoch++;if(!document.hidden)void loadMenu(true)}
+      hasWelcomed=true
+      await loadBoard()
+    }
     if(data.type==='players')players.value=data.players||[]
     if(data.type==='player_moved'){
       const found=players.value.find(p=>p.id===data.id)
@@ -78,7 +119,7 @@ function connect(){
     if(data.type==='chat_reset')chat.value=[]
     if(data.type==='emote')game.value?.showBubble(data.id,data.emoji)
     if(data.type==='feedback_changed')void feedbackBox.value?.refresh()
-    if(data.type==='menu_changed'){menuLoadedAt=0;if(overlay.value==='menu'){if(menuLoading.value)menuReloadAfterCurrent=true;else void loadMenu(true)}}
+    if(data.type==='menu:updated'||data.type==='menu_changed')onMenuUpdated(data.version)
     if(data.type==='order_changed'){
       await loadBoard()
       if(data.order?.status==='Ready') notice.value=`🔔 ${data.order.number} is ready!`
@@ -103,6 +144,7 @@ function connect(){
 function send(data:object){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(data))}
 function sendChat(){const text=message.value.trim();if(!connected.value||!text||text.length>160||!chatEnabled.value)return;send({type:'chat',text});message.value=''}
 function interact(kind:string){overlay.value=kind;if(kind==='menu')void loadMenu()}
+function petCat(){if(game.value?.petCat()==='too_far')notice.value='Walk closer to Miming to pet the cat.'}
 async function leave(){
   if(leaving.value)return
   leaving.value=true;visitThanks.value=true
@@ -119,7 +161,7 @@ async function leave(){
     <div v-if="notice" class="row between structured-notice" style="padding:10px;background:#e7f3d4"><strong style="font-size:.85rem">{{ notice }}</strong><button class="btn small secondary" aria-label="Dismiss notice" @click="notice=''">✕</button></div>
     <div class="bakery-status-strip"><span>INSIDE THE MERYENDA HUB</span><div><span>{{ preparing }} preparing</span><span class="ready-count">{{ ready }} ready</span></div></div>
     <div class="game-stage">
-      <ClientOnly><GameCanvas ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :controls-enabled="!overlay&&!leaving" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact" @yarn="event=>send(event)"/></ClientOnly>
+      <ClientOnly><GameCanvas ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :controls-enabled="!overlay&&!leaving" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact" @cat-hint="notice='Walk closer to Miming to pet the cat.'"/></ClientOnly>
     </div>
     <nav class="structured-actions" aria-label="Store actions">
       <button type="button" @click="overlay='chat'"><StoreGlyph name="chat"/><span>Chat</span></button>
@@ -129,17 +171,19 @@ async function leave(){
       <button type="button" @click="overlay='feedback'"><StoreGlyph name="feedback"/><span>Feedback</span></button>
       <button type="button" @click="leaveDialog?.open()"><StoreGlyph name="door"/><span>Leave</span></button>
     </nav>
-    <div class="help-text structured-hint" style="background:#fff7e8;text-align:center;padding-bottom:9px"><span>Drag yarn · tap Miming to pet</span><button type="button" class="yarn-toss" :disabled="!connected||!!overlay" @click="send({type:'cat_pet'})">Pet cat</button><button type="button" class="yarn-toss" aria-label="Toss yarn for Miming the shop cat" :disabled="!connected||!!overlay" @click="send({type:'yarn_toss'})">Toss yarn</button></div>
+    <div class="help-text structured-hint" style="background:#fff7e8;text-align:center;padding-bottom:9px"><span>Drag yarn · tap Miming to pet</span><button type="button" class="yarn-toss" :disabled="!!overlay" @click="petCat">Pet cat</button><button type="button" class="yarn-toss" aria-label="Toss yarn for Miming the shop cat" :disabled="!!overlay" @click="game?.tossYarn()">Toss yarn</button></div>
     <div v-if="overlay" class="overlay-shade" @click.self="overlay=''">
       <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback'}" role="dialog" aria-labelledby="store-dialog-title">
         <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ {chat:'Community Chat',menu:"Today's Menu",board:'Live Order Board',cashier:'Cashier',chef:'Chef',seat:'Take a Seat',emotes:'Reactions',feedback:'Feedback box'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
         <FeedbackBox v-if="overlay==='feedback'" ref="feedbackBox"/>
         <template v-if="overlay==='menu'">
           <p class="menu-greeting">🍡 Hi, {{ me.nickname }}! Here’s the meryenda for {{ menuDate }}.</p>
-          <p v-if="menuLoading" class="menu-message">Checking today’s menu…</p>
-          <p v-else-if="menuError" class="menu-message" role="alert">{{ menuError }}</p>
-          <p v-else-if="!menu.items.length" class="menu-message">Today’s menu hasn’t been posted yet. Please check back soon!</p>
+          <p v-if="!hasCurrentMenu&&menuLoading" class="menu-message">Checking today’s menu…</p>
+          <p v-else-if="!hasCurrentMenu&&menuError" class="menu-message" role="alert">{{ menuError }}</p>
+          <p v-else-if="!hasCurrentMenu||!menu.items.length" class="menu-message">Today’s menu hasn’t been posted yet. Please check back soon!</p>
           <ul v-else class="visitor-menu"><li v-for="item in menu.items" :key="item.id"><span>{{ item.name }}</span><strong>₱{{ (item.priceCentavos/100).toFixed(2) }}</strong></li></ul>
+          <p v-if="hasCurrentMenu&&menuLoading" class="menu-message">Updating today’s menu…</p>
+          <p v-if="hasCurrentMenu&&menuError" class="menu-message" role="alert">{{ menuError }}</p>
           <button type="button" class="btn small secondary dialog-action" :disabled="menuLoading" @click="loadMenu(true)">Refresh menu</button>
         </template>
         <template v-if="overlay==='board'">

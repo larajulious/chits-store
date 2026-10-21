@@ -2,14 +2,14 @@ import Phaser from 'phaser'
 import { avatarOptions, type AvatarId } from '../shared/avatars'
 import { reactionOptions } from '../shared/reactions'
 import type {OrderStatus} from '../shared/order-status'
-import {mascotFloorPoint,type MascotSnapshot,type CatMood} from '../shared/store-mascot'
+import {mascotFloorPoint,type CatMood} from '../shared/store-mascot'
+import {createLocalMascot} from './localMascot'
 
 export type Avatar = AvatarId
 export type Player = { id:string;nickname:string;avatar:string;x:number;y:number }
 export type BoardOrder = { id:number;number:string;status:OrderStatus }
-export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;setMascot:(snapshot:MascotSnapshot)=>void;showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void }
-type YarnEvent={type:'yarn_pickup'|'yarn_drag'|'yarn_release'|'cat_pet';x?:number;y?:number;vx?:number;vy?:number}
-type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onYarn:(event:YarnEvent)=>void;reducedMotion?:boolean;controlsEnabled?:boolean}
+export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean;petCat:()=> 'petted'|'too_far'|'busy';showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void }
+type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onCatHint:()=>void;reducedMotion?:boolean;controlsEnabled?:boolean}
 type Character = {sprite:Phaser.GameObjects.Image;avatar:string;phase:number}
 type VisitorCharacter = Character & {label:Phaser.GameObjects.Text;movingUntil:number;bubble?:Phaser.GameObjects.Text|Phaser.GameObjects.Image}
 function characterPhase(id:string){let hash=0;for(const char of id)hash=(hash*31+char.charCodeAt(0))>>>0;return hash%6000}
@@ -69,9 +69,8 @@ class StoreScene extends Phaser.Scene {
   private catSprite?:Phaser.GameObjects.Image
   private catLabel?:Phaser.GameObjects.Text
   private yarnSprite?:Phaser.GameObjects.Image
-  private mascot?:MascotSnapshot
-  private mascotReady=false
-  private draggingYarn?:{pointerId:number;lastX:number;lastY:number;lastAt:number;previousX:number;previousY:number;previousAt:number;sentAt:number}
+  private mascot=createLocalMascot()
+  private draggingYarn?:{pointerId:number;lastX:number;lastY:number;lastAt:number;previousX:number;previousY:number;previousAt:number}
   constructor(opts:Options){super('Store');this.opts=opts}
   create(){
     this.cameras.main.setBackgroundColor('#c49c6b')
@@ -234,18 +233,16 @@ class StoreScene extends Phaser.Scene {
     this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>{
       if(this.inputBlocked())return
       const x=pointer.worldX,y=pointer.worldY
-      // The guide visits the yarn's floor tile; keep its menu hit target reliable there.
+      // The guide can cross the yarn's tile; keep its menu hit target reliable there.
       if(this.menuGuide&&Math.abs(x-this.menuGuide.sprite.x)<42&&Math.abs(y-this.menuGuide.sprite.y)<45){
         this.menuGuidePath=[];this.menuGuidePauseUntil=this.time.now+3500;this.menuGuide.sprite.setTint(0xffecc2);this.opts.onInteract('menu');return
       }
-      if(this.yarnSprite&&Math.hypot(x-this.yarnSprite.x,y-this.yarnSprite.y)<24&&
-        (!this.mascot?.yarn.heldBy||this.mascot.yarn.heldBy===this.selfId)){
+      if(this.yarnSprite&&Math.hypot(x-this.yarnSprite.x,y-this.yarnSprite.y)<24&&this.mascot.pickup()){
         const now=this.time.now
-        this.draggingYarn={pointerId:pointer.id,lastX:x,lastY:y,lastAt:now,previousX:x,previousY:y,previousAt:now,sentAt:now}
-        this.opts.onYarn({type:'yarn_pickup'})
+        this.draggingYarn={pointerId:pointer.id,lastX:x,lastY:y,lastAt:now,previousX:x,previousY:y,previousAt:now}
         return
       }
-      if(this.catSprite&&Math.abs(x-this.catSprite.x)<27&&Math.abs(y-this.catSprite.y)<24){this.opts.onYarn({type:'cat_pet'});return}
+      if(this.catSprite&&Math.abs(x-this.catSprite.x)<27&&Math.abs(y-this.catSprite.y)<24){if(this.petCat()==='too_far')this.opts.onCatHint();return}
       if(y<198&&x>185){this.walkTo(272,277,()=>this.opts.onInteract('board'));return}
       if(y<195&&x<175){this.walkTo(93,273,()=>this.opts.onInteract('chef'));return}
       if(y<256&&x>32){this.walkTo(177,273,()=>this.opts.onInteract('cashier'));return}
@@ -305,18 +302,14 @@ class StoreScene extends Phaser.Scene {
     ball.lineStyle(1,0x634471).lineBetween(13,15,19,17)
     ball.generateTexture('yarn-ball',23,21);ball.destroy()
   }
-  setMascot(snapshot:MascotSnapshot){
-    this.mascot=snapshot
-    if(!this.catSprite||!this.yarnSprite)return
-    if(!this.mascotReady){this.catSprite.setPosition(snapshot.cat.x,snapshot.cat.y);this.yarnSprite.setPosition(snapshot.yarn.x,snapshot.yarn.y);this.mascotReady=true}
-    if(this.draggingYarn&&snapshot.yarn.heldBy&&snapshot.yarn.heldBy!==this.selfId)this.draggingYarn=undefined
-  }
+  tossYarn(){return this.mascot.toss(this.time.now)}
+  petCat(){return this.mascot.pet({x:this.self?.sprite.x??180,y:this.self?.sprite.y??510},this.time.now)}
   private updateMascot(delta:number){
-    const snapshot=this.mascot,cat=this.catSprite,ball=this.yarnSprite,label=this.catLabel
-    if(!snapshot||!cat||!ball||!label)return
-    const catFollow=Math.min(1,delta/210),ballFollow=Math.min(1,delta/90)
-    cat.x=Phaser.Math.Linear(cat.x,snapshot.cat.x,catFollow);cat.y=Phaser.Math.Linear(cat.y,snapshot.cat.y,catFollow)
-    if(!this.draggingYarn){ball.x=Phaser.Math.Linear(ball.x,snapshot.yarn.x,ballFollow);ball.y=Phaser.Math.Linear(ball.y,snapshot.yarn.y,ballFollow)}
+    this.mascot.tick(this.time.now,delta)
+    const snapshot=this.mascot.snapshot(this.time.now),cat=this.catSprite,ball=this.yarnSprite,label=this.catLabel
+    if(!cat||!ball||!label)return
+    cat.setPosition(snapshot.cat.x,snapshot.cat.y)
+    ball.setPosition(snapshot.yarn.x,snapshot.yarn.y)
     const mood:CatMood=snapshot.cat.mood
     const texture=mood==='walking'||mood==='approaching_yarn'||mood==='returning_to_idle'?(Math.floor(this.time.now/180)%2?'cat-walk':'cat-idle'):
       mood==='sleeping'?'cat-sleep':mood==='resting'?'cat-rest':mood==='stretching'?'cat-stretch':mood==='noticing_yarn'?'cat-notice':mood==='playing_with_yarn'?'cat-play':'cat-sit'
@@ -336,8 +329,8 @@ class StoreScene extends Phaser.Scene {
     if(!mascotFloorPoint(x,y,6))return
     const now=this.time.now
     if(Math.hypot(x-drag.lastX,y-drag.lastY)>1){drag.previousX=drag.lastX;drag.previousY=drag.lastY;drag.previousAt=drag.lastAt;drag.lastX=x;drag.lastY=y;drag.lastAt=now}
+    this.mascot.drag(x,y,now)
     this.yarnSprite?.setPosition(x,y)
-    if(now-drag.sentAt>=80){drag.sentAt=now;this.opts.onYarn({type:'yarn_drag',x,y})}
   }
   private releaseYarn(pointer:Phaser.Input.Pointer){
     const drag=this.draggingYarn
@@ -347,7 +340,7 @@ class StoreScene extends Phaser.Scene {
     const y=mascotFloorPoint(pointer.worldX,pointer.worldY,6)?pointer.worldY:drag.lastY
     const elapsed=Math.max(30,drag.lastAt-drag.previousAt),recent=this.time.now-drag.lastAt<140
     const vx=recent?(drag.lastX-drag.previousX)/elapsed*700:0,vy=recent?(drag.lastY-drag.previousY)/elapsed*700:0
-    this.opts.onYarn({type:'yarn_release',x,y,vx,vy})
+    this.mascot.release(x,y,vx,vy,this.time.now)
   }
   walkTo(x:number,y:number,callback?:()=>void){if(!this.self||this.inputBlocked())return;this.path=pathFind(new Phaser.Math.Vector2(this.self.sprite.x,this.self.sprite.y),new Phaser.Math.Vector2(x,y));this.afterPath=callback}
   setDirection(x:number,y:number){if(this.inputBlocked()){this.resetMovement();return}this.direction.set(x,y);if(x||y){this.path=[];this.afterPath=undefined}}
@@ -358,7 +351,7 @@ class StoreScene extends Phaser.Scene {
   }
   private resetMovement(){this.direction.set(0,0);this.path=[];this.afterPath=undefined;this.input?.keyboard?.resetKeys()}
   setControlsEnabled(value:boolean){
-    if(!value&&this.draggingYarn){const d=this.draggingYarn;this.draggingYarn=undefined;this.opts.onYarn({type:'yarn_release',x:d.lastX,y:d.lastY,vx:0,vy:0})}
+    if(!value&&this.draggingYarn){const d=this.draggingYarn;this.draggingYarn=undefined;this.mascot.release(d.lastX,d.lastY,0,0,this.time.now)}
     this.opts.controlsEnabled=value;this.resetMovement();if(value)this.menuGuide?.sprite.clearTint();if(this.input?.keyboard)this.input.keyboard.enabled=value
   }
   setReducedMotion(value:boolean){this.opts.reducedMotion=value;this.cookingFrame=-2}
@@ -530,5 +523,5 @@ export function createGame(el:HTMLElement,opts:Options):StoreGame{
   const scene=new StoreScene(opts)
   const game=new Phaser.Game({type:Phaser.AUTO,parent:el,width:W,height:H,backgroundColor:'#d0a377',pixelArt:true,
     scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH,width:W,height:H},scene:[scene],render:{antialias:false}})
-  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(scene.sys?.isActive())scene.movePlayer(id,x,y)},setMascot:snapshot=>{if(scene.sys?.isActive())scene.setMascot(snapshot)},showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value)}
+  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(scene.sys?.isActive())scene.movePlayer(id,x,y)},tossYarn:()=>scene.sys?.isActive()?scene.tossYarn():false,petCat:()=>scene.sys?.isActive()?scene.petCat():'busy',showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value)}
 }

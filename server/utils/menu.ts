@@ -1,4 +1,5 @@
 import { createError } from 'h3'
+import { createHash } from 'node:crypto'
 import { db } from './db'
 
 type MenuRow = { id:number; name:string; price_centavos:number }
@@ -12,7 +13,9 @@ export function todayInManila() {
 export function menuToday() {
   const date = todayInManila()
   const rows = db().prepare('SELECT id,name,price_centavos FROM daily_menu WHERE service_date=? ORDER BY id').all(date) as MenuRow[]
-  return { date, items:rows.map(row=>({ id:row.id, name:row.name, priceCentavos:row.price_centavos })) }
+  const items=rows.map(row=>({ id:row.id, name:row.name, priceCentavos:row.price_centavos }))
+  const version=createHash('sha256').update(JSON.stringify({date,items})).digest('hex').slice(0,16)
+  return { date, version, items }
 }
 
 export function menuItemInput(body:{name?:unknown;priceCentavos?:unknown}) {

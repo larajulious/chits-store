@@ -2,7 +2,6 @@ import { defineWebSocketHandler } from 'h3'
 import { allowedOrigin, visitorSessionFromCookie, visitorName } from '../utils/auth'
 import { joinRoom, leaveRoom, findMember, broadcast, publishChat, playerList, isChatEnabled, isMuted, authorized, recordInteraction } from '../utils/room'
 import {isStoreOpen} from '../utils/store'
-import {pickupYarn,dragYarn,releaseYarn,tossYarn,petCat,publishMascot} from '../utils/mascot'
 
 export default defineWebSocketHandler({
   upgrade(request){
@@ -32,7 +31,7 @@ export default defineWebSocketHandler({
     if(!rate||now-rate.at>=1000)peer.context.rate={at:now,count:1}
     else if(++rate.count>40){leaveRoom(peer.id);peer.close(1008,'Message rate exceeded');return}
     if (message.text().length > 1000) return
-    let data: { type?:string; text?:string; x?:number; y?:number; vx?:number; vy?:number; emoji?:string }
+    let data: { type?:string; text?:string; x?:number; y?:number; emoji?:string }
     try { const parsed:unknown=JSON.parse(message.text());if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))return;data=parsed } catch { return }
     if (data.type === 'move') {
       const x=data.x, y=data.y, now=Date.now()
@@ -63,27 +62,6 @@ export default defineWebSocketHandler({
       p.lastChat=now
       recordInteraction(p)
       broadcast({type:'emote',id:p.id,emoji})
-    } else if(data.type==='yarn_pickup'){
-      if(pickupYarn(p.id))publishMascot()
-    } else if(data.type==='yarn_drag'){
-      if(typeof data.x!=='number'||typeof data.y!=='number')return
-      const lastDrag=peer.context.lastYarnDrag as number|undefined
-      if(lastDrag&&now-lastDrag<70)return
-      if(dragYarn(p.id,data.x,data.y)){peer.context.lastYarnDrag=now;publishMascot()}
-    } else if(data.type==='yarn_release'){
-      if(typeof data.x!=='number'||typeof data.y!=='number'||typeof data.vx!=='number'||typeof data.vy!=='number'||
-        !Number.isFinite(data.vx)||!Number.isFinite(data.vy))return
-      if(releaseYarn(p.id,data.x,data.y,data.vx,data.vy))publishMascot()
-    } else if(data.type==='yarn_toss'){
-      const lastToss=peer.context.lastToss as number|undefined
-      if(lastToss&&now-lastToss<1800)return
-      if(tossYarn()){peer.context.lastToss=now;publishMascot()}
-    } else if(data.type==='cat_pet'){
-      const lastPet=peer.context.lastPet as number|undefined
-      if(lastPet&&now-lastPet<2500)return
-      peer.context.lastPet=now
-      if(petCat({x:p.x,y:p.y}))publishMascot()
-      else peer.send(JSON.stringify({type:'cat_pet_unavailable'}))
     } else if (data.type==='ping') {
       peer.send(JSON.stringify({type:'pong',count:playerList().length}))
     }

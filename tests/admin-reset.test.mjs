@@ -51,7 +51,9 @@ test('admin can selectively reset store data without touching credentials or sto
 
   assert.equal((await reset(['menu'])).status,200)
   await waitFor(()=>messages.some(message=>message.type==='menu_changed'))
-  assert.equal((await req('/api/menu/today').then(r=>r.json())).items.length,0)
+  const resetMenu=await req('/api/menu/today').then(r=>r.json())
+  assert.equal(resetMenu.items.length,0)
+  assert.ok(messages.some(message=>message.type==='menu:updated'&&message.version===resetMenu.version))
   assert.equal(db.prepare('SELECT COUNT(*) AS total FROM daily_menu').get().total,1)
   assert.equal((await req('/api/admin/orders',{cookie:admin}).then(r=>r.json())).length,1)
   assert.equal((await req('/api/admin/feedback',{cookie:admin}).then(r=>r.json())).pendingCount,1)

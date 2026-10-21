@@ -23,6 +23,11 @@ const clients=[]
 try{
   for(let i=0;i<120;i++){try{if((await fetch(origin+'/api/store/status')).ok)break}catch{}if(child.exitCode!==null)throw Error('Server exited');if(i===119)throw Error('Server did not start');await sleep(50)}
   async function memoryKiB(){const {stdout}=await run('ps',['-p',String(child.pid),'-o','rss=']);return Number(stdout.trim())}
+  async function cpuMs(){
+    const {stdout}=await run('ps',['-p',String(child.pid),'-o','time='])
+    const parts=stdout.trim().split(':').map(Number)
+    return (parts.length===3?parts[0]*3600+parts[1]*60+parts[2]:parts[0]*60+parts[1])*1000
+  }
   async function createVisitor(i){
     const response=await fetch(origin+'/api/visitors/join',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json','X-Real-IP':`192.0.2.${i+1}`},body:JSON.stringify({avatar:i%2?'biko':'palitaw'})})
     if(!response.ok)throw Error(`Visitor ${i} join HTTP ${response.status}`)
@@ -45,11 +50,11 @@ try{
       owner.socket.send(JSON.stringify({type:'yarn_release',x:175,y:440,vx:110,vy:0}))
       await sleep(80)
     }
-    const before=clients.map(client=>({messages:client.messages,mascot:client.mascot}))
+    const before=clients.map(client=>({messages:client.messages,mascot:client.mascot})),cpuBefore=await cpuMs()
     const started=Date.now()
     await sleep(1200)
     const seconds=(Date.now()-started)/1000
-    rows.push({requested:target,accepted:clients.filter(client=>client.welcomed).length,roomFull:clients.filter(client=>client.full).length,rssMiB:Math.round(await memoryKiB()/1024),messagesPerSecond:+(clients.reduce((total,client,i)=>total+client.messages-before[i].messages,0)/seconds).toFixed(1),mascotMessagesPerSecond:+(clients.reduce((total,client,i)=>total+client.mascot-before[i].mascot,0)/seconds).toFixed(1)})
+    rows.push({requested:target,accepted:clients.filter(client=>client.welcomed).length,roomFull:clients.filter(client=>client.full).length,rssMiB:Math.round(await memoryKiB()/1024),cpuPercent:+((await cpuMs()-cpuBefore)/(seconds*10)).toFixed(1),messagesPerSecond:+(clients.reduce((total,client,i)=>total+client.messages-before[i].messages,0)/seconds).toFixed(1),mascotMessagesPerSecond:+(clients.reduce((total,client,i)=>total+client.mascot-before[i].mascot,0)/seconds).toFixed(1)})
   }
   console.log(JSON.stringify({platform:process.platform,node:process.version,sampleSeconds:1.2,rows},null,2))
 }finally{

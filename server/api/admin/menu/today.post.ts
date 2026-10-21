@@ -3,7 +3,7 @@ import { requireAdmin, verifyOrigin } from '../../../utils/auth'
 import { readJsonBody } from '../../../utils/body'
 import { db } from '../../../utils/db'
 import { menuItemInput, menuToday, todayInManila } from '../../../utils/menu'
-import { broadcast } from '../../../utils/room'
+import { publishMenuUpdated } from '../../../utils/room'
 
 export default defineEventHandler(async event=>{
   requireAdmin(event);verifyOrigin(event)
@@ -14,7 +14,8 @@ export default defineEventHandler(async event=>{
     if(count>=30)throw createError({statusCode:409,statusMessage:'Today’s menu is full (30 items)'})
     connection.prepare('INSERT INTO daily_menu(service_date,name,price_centavos,created_at,updated_at) VALUES(?,?,?,?,?)').run(date,input.name,input.priceCentavos,now,now)
   }).immediate()
-  broadcast({type:'menu_changed'})
+  const current=menuToday()
+  publishMenuUpdated(current)
   setHeader(event,'Cache-Control','no-store')
-  return menuToday()
+  return current
 })

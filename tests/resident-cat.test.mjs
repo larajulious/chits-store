@@ -2,20 +2,55 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {spawn} from 'node:child_process'
 import {randomBytes,scryptSync} from 'node:crypto'
-import {mkdtemp,rm} from 'node:fs/promises'
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import {pathToFileURL} from 'node:url'
 import {createServer} from 'node:http'
 import {once} from 'node:events'
+import ts from 'typescript'
 import WebSocket from 'ws'
 
+const root=new URL('..',import.meta.url)
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms))
-test('resident cat and yarn are shared, bounded, and interaction-owned',{timeout:30_000},async t=>{
-  const dir=await mkdtemp(join(tmpdir(),'chits-cat-'))
+
+test('each scene owns its cat and yarn, with local pet and toss state',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'chits-local-cat-'))
+  t.after(()=>rm(dir,{recursive:true,force:true}))
+  const shared=await readFile(new URL('../shared/store-mascot.ts',import.meta.url),'utf8')
+  const local=(await readFile(new URL('../game/localMascot.ts',import.meta.url),'utf8')).replace("'../shared/store-mascot'","'./store-mascot.mjs'")
+  const compile=source=>ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText
+  await writeFile(join(dir,'store-mascot.mjs'),compile(shared))
+  await writeFile(join(dir,'localMascot.mjs'),compile(local))
+  const {createLocalMascot}=await import(pathToFileURL(join(dir,'localMascot.mjs')).href)
+  const a=createLocalMascot(),b=createLocalMascot()
+  assert.deepEqual(a.snapshot(0),b.snapshot(0))
+  assert.equal(a.pet({x:100,y:290},0),'petted')
+  assert.equal(a.snapshot(0).cat.purring,true)
+  assert.equal(b.snapshot(0).cat.purring,false)
+  assert.equal(a.toss(0),true)
+  assert.equal(a.toss(100),false)
+  assert.equal(b.snapshot(0).yarn.moving,false)
+  a.tick(16,16)
+  assert.equal(a.snapshot(16).yarn.moving,true)
+  assert.equal(b.snapshot(16).yarn.moving,false)
+  assert.equal(b.pickup(),true)
+  assert.equal(b.drag(210,440,100),true)
+  assert.equal(b.drag(500,500,110),false)
+  b.release(210,440,90,0,120)
+  assert.equal(b.snapshot(120).yarn.x,210)
+  assert.equal(a.snapshot(120).yarn.x!==210,true)
+  for(let time=32;time<24_000;time+=16)a.tick(time,16)
+  assert.ok(['walking','sitting','resting','sleeping','stretching','noticing_yarn','approaching_yarn','playing_with_yarn','returning_to_idle'].includes(a.snapshot(24_000).cat.mood))
+  assert.equal(b.snapshot(24_000).cat.x,100)
+})
+
+test('legacy character packets cannot reach other visitors; chat remains shared',{timeout:30_000},async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'chits-cat-socket-'))
   const server=createServer();server.listen(0,'127.0.0.1');await once(server,'listening')
   const port=server.address().port;await new Promise(resolve=>server.close(resolve))
   const base=`http://127.0.0.1:${port}`,salt=randomBytes(16).toString('hex')
-  const child=spawn(process.execPath,['.output/server/index.mjs'],{cwd:new URL('..',import.meta.url),env:{...process.env,NODE_ENV:'production',NITRO_HOST:'127.0.0.1',NITRO_PORT:String(port),SQLITE_PATH:join(dir,'test.sqlite'),SESSION_SECRET:randomBytes(32).toString('hex'),ADMIN_PASSWORD_HASH:`${salt}:${scryptSync('test-only',salt,64).toString('hex')}`,PUBLIC_ORIGIN:base},stdio:['ignore','pipe','pipe']})
+  const child=spawn(process.execPath,['.output/server/index.mjs'],{cwd:root,env:{...process.env,NODE_ENV:'production',NITRO_HOST:'127.0.0.1',NITRO_PORT:String(port),SQLITE_PATH:join(dir,'test.sqlite'),SESSION_SECRET:randomBytes(32).toString('hex'),ADMIN_PASSWORD_HASH:`${salt}:${scryptSync('test-only',salt,64).toString('hex')}`,PUBLIC_ORIGIN:base},stdio:['ignore','pipe','pipe']})
   let logs='';child.stdout.on('data',chunk=>logs+=chunk);child.stderr.on('data',chunk=>logs+=chunk)
   const peers=[]
   t.after(async()=>{for(const peer of peers)peer.ws.terminate();if(child.exitCode===null){const ended=once(child,'exit');child.kill();await ended}await rm(dir,{recursive:true,force:true});assert.doesNotMatch(logs,/uncaughtException|unhandledRejection/)})
@@ -28,54 +63,24 @@ test('resident cat and yarn are shared, bounded, and interaction-owned',{timeout
     const peer={ws,inbox:[]};peers.push(peer);ws.on('message',data=>peer.inbox.push(JSON.parse(String(data))));ws.on('error',()=>{})
     await once(ws,'open');return peer
   }
-  async function next(peer,predicate,from=0,timeout=3500){
-    const until=Date.now()+timeout
-    while(Date.now()<until){const found=peer.inbox.slice(from).find(predicate);if(found)return found;await delay(15)}
+  async function next(peer,predicate,from=0){
+    for(let i=0;i<200;i++){const found=peer.inbox.slice(from).find(predicate);if(found)return found;await delay(15)}
     assert.fail('Expected socket event missing')
   }
   const a=await connect('palitaw'),b=await connect('biko')
   const welcomeA=await next(a,m=>m.type==='welcome'),welcomeB=await next(b,m=>m.type==='welcome')
-  assert.deepEqual(welcomeA.mascot,welcomeB.mascot)
-  assert.equal(welcomeA.mascot.yarn.heldBy,null)
-  b.ws.send(JSON.stringify({type:'cat_pet'}))
-  await next(b,m=>m.type==='cat_pet_unavailable')
-  for(const y of [490,470,450,430,410,390,370,350,330,310,290]){await delay(85);a.ws.send(JSON.stringify({type:'move',x:180,y}))}
-  for(const x of [160,140,120,100]){await delay(85);a.ws.send(JSON.stringify({type:'move',x,y:290}))}
-  const petFrom=b.inbox.length
-  a.ws.send(JSON.stringify({type:'cat_pet'}))
-  await next(b,m=>m.type==='mascot'&&m.mascot.cat.purring,petFrom)
-  const petCount=b.inbox.filter(m=>m.type==='mascot'&&m.mascot.cat.purring).length
-  a.ws.send(JSON.stringify({type:'cat_pet'}))
-  await delay(100)
-  assert.equal(b.inbox.filter(m=>m.type==='mascot'&&m.mascot.cat.purring).length,petCount)
-  a.ws.send(JSON.stringify({type:'yarn_pickup'}))
-  const held=await next(b,m=>m.type==='mascot'&&m.mascot.yarn.heldBy===welcomeA.selfId)
-  assert.equal(held.mascot.yarn.heldBy,welcomeA.selfId)
-  b.ws.send(JSON.stringify({type:'yarn_pickup'}))
-  b.ws.send(JSON.stringify({type:'yarn_drag',x:210,y:440}))
-  await delay(90)
-  assert.equal(b.inbox.some(m=>m.type==='mascot'&&m.mascot.yarn.x===210),false)
-  a.ws.send(JSON.stringify({type:'yarn_drag',x:210,y:440}))
-  await next(b,m=>m.type==='mascot'&&m.mascot.yarn.x===210)
-  a.ws.send(JSON.stringify({type:'yarn_drag',x:500,y:500}))
-  await delay(90)
-  assert.equal(b.inbox.some(m=>m.type==='mascot'&&m.mascot.yarn.x===500),false)
-  a.ws.send(JSON.stringify({type:'yarn_release',x:210,y:440,vx:90,vy:0}))
-  await next(b,m=>m.type==='mascot'&&m.mascot.yarn.heldBy===null&&m.mascot.yarn.x>=210)
-  b.ws.send(JSON.stringify({type:'yarn_pickup'}))
-  await next(a,m=>m.type==='mascot'&&m.mascot.yarn.heldBy===welcomeB.selfId)
-  b.ws.close();await once(b.ws,'close')
-  // A disconnected owner must not keep a five-second lock.
-  const unlockedFrom=a.inbox.length
-  a.ws.send(JSON.stringify({type:'yarn_pickup'}))
-  await next(a,m=>m.type==='mascot'&&m.mascot.yarn.heldBy===welcomeA.selfId,unlockedFrom)
-  a.ws.send(JSON.stringify({type:'yarn_release',x:210,y:440,vx:0,vy:0}))
-  await next(a,m=>m.type==='mascot'&&m.mascot.yarn.heldBy===null,unlockedFrom)
-  const before=a.inbox.length
-  a.ws.send(JSON.stringify({type:'yarn_toss'}))
-  await next(a,m=>m.type==='mascot'&&m.mascot.yarn.moving,before)
-  const start=Date.now();await delay(1200)
-  const positionUpdates=a.inbox.slice(before).filter(m=>m.type==='mascot'&&m.mascot.yarn.moving&&m.mascot.yarn.heldBy===null).length
-  assert.ok(positionUpdates<25,`Too many mascot updates: ${positionUpdates}`)
-  assert.ok(Date.now()-start>=1100)
+  assert.equal(Object.hasOwn(welcomeA,'mascot'),false)
+  assert.equal(Object.hasOwn(welcomeB,'mascot'),false)
+  const beforeA=a.inbox.length,beforeB=b.inbox.length
+  for(const packet of [{type:'cat_pet'},{type:'yarn_pickup'},{type:'yarn_drag',x:210,y:440},{type:'yarn_release',x:210,y:440,vx:90,vy:0},{type:'yarn_toss'}])a.ws.send(JSON.stringify(packet))
+  a.ws.send(JSON.stringify({type:'ping'}))
+  await next(a,m=>m.type==='pong',beforeA)
+  await delay(150)
+  assert.ok(a.inbox.slice(beforeA).some(m=>m.type==='pong'))
+  assert.ok(a.inbox.slice(beforeA).every(m=>m.type==='pong'||m.type==='players'))
+  assert.ok(b.inbox.slice(beforeB).every(m=>m.type==='players'))
+  const chatStart=b.inbox.length
+  a.ws.send(JSON.stringify({type:'chat',text:'Hello from the store'}))
+  const chat=await next(b,m=>m.type==='chat',chatStart)
+  assert.equal(chat.text,'Hello from the store')
 })

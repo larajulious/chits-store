@@ -1,7 +1,7 @@
 import { activeVisitor, getVisitor, publicOrder, type OrderRow } from './db'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, AdminChatState } from '../../shared/chat'
-import { mascotSnapshot, releaseYarnOwner, startMascotUpdates } from './mascot'
+import { mascotSnapshot, releaseYarnOwner, startMascotUpdates, wakeMascotUpdates } from './mascot'
 
 type Connection = {
   id: string
@@ -19,6 +19,7 @@ type Connection = {
   close: () => void
 }
 const members = new Map<string, Connection>()
+let lastPruneAt=0
 const interactions=new Map<number,{lastChat:number;chatWindowStart:number;chatCount:number}>()
 const serialize = (x: unknown) => JSON.stringify(x)
 let chatEnabled = true
@@ -34,7 +35,10 @@ export function adminChatState():AdminChatState{
   return {messages:[...chatHistory],chatEnabled,online:members.size}
 }
 export function authorized(p:Connection){return Date.now()<p.expiresAt&&activeVisitor(getVisitor(p.visitorId))}
-function pruneExpired(){
+function pruneExpired(force=false){
+  const now=Date.now()
+  if(!force&&now-lastPruneAt<900)return false
+  lastPruneAt=now
   let changed=false
   for(const p of members.values())if(!authorized(p)){
     members.delete(p.id);releaseYarnOwner(p.id);changed=true
@@ -59,7 +63,7 @@ export function broadcast(payload: object) {
 export function findMember(id: string) { return members.get(id) }
 export function joinRoom(p: Connection) {
   // One connected avatar per visitor session; an old tab is replaced on reconnect.
-  pruneExpired()
+  pruneExpired(true)
   for (const old of members.values()) if (old.visitorId === p.visitorId) {
     members.delete(old.id);releaseYarnOwner(old.id);try{old.send(serialize({type:'replaced'}));old.close()}catch{}
   }
@@ -67,6 +71,7 @@ export function joinRoom(p: Connection) {
   const previous=interactions.get(p.visitorId)
   if(previous)Object.assign(p,previous)
   members.set(p.id, p)
+  if(members.size===1)wakeMascotUpdates()
   p.send(serialize({ type:'welcome', selfId:p.id, players:playerList(), chatEnabled, mascot:mascotSnapshot() }))
   broadcast({ type:'players', players:playerList() })
 }

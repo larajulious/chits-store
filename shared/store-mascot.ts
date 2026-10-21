@@ -1,5 +1,5 @@
 export type CatMood='idle'|'walking'|'sitting'|'resting'|'sleeping'|'stretching'|'noticing_yarn'|'approaching_yarn'|'playing_with_yarn'|'returning_to_idle'
-export type MascotSnapshot={cat:{x:number;y:number;mood:CatMood;facing:-1|1};yarn:{x:number;y:number;heldBy:string|null;moving:boolean}}
+export type MascotSnapshot={cat:{x:number;y:number;mood:CatMood;facing:-1|1;purring:boolean};yarn:{x:number;y:number;heldBy:string|null;moving:boolean}}
 
 const obstacles=[{x:48,y:328,w:87,h:60},{x:228,y:365,w:86,h:58},{x:282,y:472,w:44,h:40}]
 export function mascotFloorPoint(x:number,y:number,padding=0){

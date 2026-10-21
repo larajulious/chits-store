@@ -10,6 +10,7 @@ A cozy multiplayer bakery prototype, built in one **Nuxt + Phaser + SQLite** pro
 - The structured pixel layout is the only public layout at `/` and `/store`; no preview query parameter is needed.
 - The welcome-page storefront has subtle pixel animation: warm windows, a gently pulsing sign, a door that occasionally opens, and chimney puffs. When closed, its door stays shut, the windows dim and gently pulse, and small “Z”s drift above the roof. Reduced motion keeps both scenes still.
 - A generated guest nickname (`Mochi #001`, etc.) avoids requiring usernames or accounts.
+- Miming, the resident shop cat, roams and rests inside the store. Visitors can drag or toss its shared yarn ball and pet it when nearby. Cat motion is interpolated locally from sparse room updates; see [performance audit and device checklist](docs/RESIDENT_CAT_PERFORMANCE.md).
 - A browser session represents one public visitor; returning visitors can choose a different avatar.
 - WebSocket multiplayer and chat now authenticate public visitor sessions, not orders.
 - Public order board shows **only order numbers and Preparing/Ready/Out for Delivery/Delivered statuses**. The in-game Live Orders board spells out **Preparing** and lists up to five most recent Out for Delivery orders; the Orders panel keeps the full public feed. Orders remain active through Out for Delivery; Delivered orders remain on the public board for five minutes and in admin history.

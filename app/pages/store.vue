@@ -10,13 +10,16 @@ type PublicOrder = { id:number; number:string; status:Status }
 type MenuState = { date:string; items:{id:number;name:string;priceCentavos:number}[] }
 type Me = { nickname:string; avatar:string }
 const me=ref<Me|null>(null), board=ref<PublicOrder[]>([]), players=ref<Player[]>([]), selfId=ref('')
-const mascot=ref<MascotSnapshot|null>(null)
+let latestMascot:MascotSnapshot|null=null
 const menu=ref<MenuState>({date:'',items:[]}),menuLoading=ref(false),menuError=ref('')
+let menuLoadedAt=0
+let menuReloadAfterCurrent=false
 const menuDate=computed(()=>menu.value.date?new Date(`${menu.value.date}T12:00:00`).toLocaleDateString('en-PH',{month:'long',day:'numeric'}):'today')
 const visitorAvatar=computed(()=>isAvatar(me.value?.avatar)?me.value.avatar:'mochi')
 const online=computed(()=>players.value.length)
 const overlay=ref(''), message=ref(''), chat=ref<ChatMessage[]>([]), notice=ref(''), connected=ref(false), returningHome=ref(false), chatEnabled=ref(true)
-const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void}|null>(null)
+const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setMascot:(snapshot:MascotSnapshot)=>void;movePlayer:(id:string,x:number,y:number)=>void}|null>(null)
+watch(game,instance=>{if(instance&&latestMascot)instance.setMascot(latestMascot)})
 const leaveDialog=ref<{open:()=>void;close:()=>void}|null>(null),leaving=ref(false)
 const visitThanks=useState<boolean>('visit-thanks',()=>false)
 const feedbackBox=ref<{refresh:()=>Promise<void>}|null>(null)
@@ -31,7 +34,14 @@ onMounted(async()=>{
 })
 onBeforeUnmount(()=>{alive=false;clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);socket?.close()})
 async function loadBoard(){try{board.value=await $fetch<PublicOrder[]>('/api/orders/board')}catch{}}
-async function loadMenu(){menuLoading.value=true;menuError.value='';try{menu.value=await $fetch<MenuState>('/api/menu/today')}catch{menuError.value='Could not load today’s menu. Please try again.'}finally{menuLoading.value=false}}
+async function loadMenu(force=false){
+  if(!force&&menuLoadedAt&&Date.now()-menuLoadedAt<30_000)return
+  if(menuLoading.value)return
+  menuLoading.value=true;menuError.value=''
+  try{menu.value=await $fetch<MenuState>('/api/menu/today');menuLoadedAt=Date.now()}
+  catch{menuError.value='Could not load today’s menu. Please try again.'}
+  finally{menuLoading.value=false;if(menuReloadAfterCurrent){menuReloadAfterCurrent=false;void loadMenu(true)}}
+}
 async function returnHome(){
   if(!alive||returningHome.value)return
   returningHome.value=true
@@ -48,12 +58,16 @@ function connect(){
   current.onmessage=async evt=>{
     if(returningHome.value)return
     let data:any; try{data=JSON.parse(evt.data)}catch{return}
-    if(data.type==='welcome'){connected.value=true;selfId.value=data.selfId;players.value=data.players||[];mascot.value=data.mascot||null;chatEnabled.value=data.chatEnabled!==false;await loadBoard()}
-    if(data.type==='mascot')mascot.value=data.mascot
+    if(data.type==='welcome'){connected.value=true;selfId.value=data.selfId;players.value=data.players||[];latestMascot=data.mascot||null;if(latestMascot)game.value?.setMascot(latestMascot);chatEnabled.value=data.chatEnabled!==false;await loadBoard()}
+    if(data.type==='mascot'){latestMascot=data.mascot;game.value?.setMascot(data.mascot)}
+    if(data.type==='cat_pet_unavailable')notice.value='Walk closer to Miming to pet the cat.'
     if(data.type==='players')players.value=data.players||[]
     if(data.type==='player_moved'){
       const found=players.value.find(p=>p.id===data.id)
-      if(found&&found.id!==selfId.value){found.x=data.x;found.y=data.y;players.value=[...players.value]}
+      if(found&&found.id!==selfId.value&&Number.isFinite(data.x)&&Number.isFinite(data.y)){
+        Object.assign(toRaw(found),{x:data.x,y:data.y})
+        game.value?.movePlayer(data.id,data.x,data.y)
+      }
     }
     if(data.type==='chat'){
       const entry:ChatMessage={messageId:data.messageId,id:data.id,nickname:data.nickname,text:data.text,at:data.at,role:data.role==='staff'?'staff':'visitor'}
@@ -64,7 +78,7 @@ function connect(){
     if(data.type==='chat_reset')chat.value=[]
     if(data.type==='emote')game.value?.showBubble(data.id,data.emoji)
     if(data.type==='feedback_changed')void feedbackBox.value?.refresh()
-    if(data.type==='menu_changed'&&overlay.value==='menu')void loadMenu()
+    if(data.type==='menu_changed'){menuLoadedAt=0;if(overlay.value==='menu'){if(menuLoading.value)menuReloadAfterCurrent=true;else void loadMenu(true)}}
     if(data.type==='order_changed'){
       await loadBoard()
       if(data.order?.status==='Ready') notice.value=`🔔 ${data.order.number} is ready!`
@@ -105,7 +119,7 @@ async function leave(){
     <div v-if="notice" class="row between structured-notice" style="padding:10px;background:#e7f3d4"><strong style="font-size:.85rem">{{ notice }}</strong><button class="btn small secondary" aria-label="Dismiss notice" @click="notice=''">✕</button></div>
     <div class="bakery-status-strip"><span>INSIDE THE MERYENDA HUB</span><div><span>{{ preparing }} preparing</span><span class="ready-count">{{ ready }} ready</span></div></div>
     <div class="game-stage">
-      <ClientOnly><GameCanvas ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :mascot="mascot" :controls-enabled="!overlay&&!leaving" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact" @yarn="event=>send(event)"/></ClientOnly>
+      <ClientOnly><GameCanvas ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :controls-enabled="!overlay&&!leaving" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact" @yarn="event=>send(event)"/></ClientOnly>
     </div>
     <nav class="structured-actions" aria-label="Store actions">
       <button type="button" @click="overlay='chat'"><StoreGlyph name="chat"/><span>Chat</span></button>
@@ -115,7 +129,7 @@ async function leave(){
       <button type="button" @click="overlay='feedback'"><StoreGlyph name="feedback"/><span>Feedback</span></button>
       <button type="button" @click="leaveDialog?.open()"><StoreGlyph name="door"/><span>Leave</span></button>
     </nav>
-    <div class="help-text structured-hint" style="background:#fff7e8;text-align:center;padding-bottom:9px"><span>Drag the yarn to play with Miming · WASD to walk</span><button type="button" class="yarn-toss" aria-label="Toss yarn for Miming the shop cat" :disabled="!connected||!!overlay" @click="send({type:'yarn_toss'})">Toss yarn</button></div>
+    <div class="help-text structured-hint" style="background:#fff7e8;text-align:center;padding-bottom:9px"><span>Drag yarn · tap Miming to pet</span><button type="button" class="yarn-toss" :disabled="!connected||!!overlay" @click="send({type:'cat_pet'})">Pet cat</button><button type="button" class="yarn-toss" aria-label="Toss yarn for Miming the shop cat" :disabled="!connected||!!overlay" @click="send({type:'yarn_toss'})">Toss yarn</button></div>
     <div v-if="overlay" class="overlay-shade" @click.self="overlay=''">
       <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback'}" role="dialog" aria-labelledby="store-dialog-title">
         <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ {chat:'Community Chat',menu:"Today's Menu",board:'Live Order Board',cashier:'Cashier',chef:'Chef',seat:'Take a Seat',emotes:'Reactions',feedback:'Feedback box'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
@@ -126,7 +140,7 @@ async function leave(){
           <p v-else-if="menuError" class="menu-message" role="alert">{{ menuError }}</p>
           <p v-else-if="!menu.items.length" class="menu-message">Today’s menu hasn’t been posted yet. Please check back soon!</p>
           <ul v-else class="visitor-menu"><li v-for="item in menu.items" :key="item.id"><span>{{ item.name }}</span><strong>₱{{ (item.priceCentavos/100).toFixed(2) }}</strong></li></ul>
-          <button type="button" class="btn small secondary dialog-action" :disabled="menuLoading" @click="loadMenu">Refresh menu</button>
+          <button type="button" class="btn small secondary dialog-action" :disabled="menuLoading" @click="loadMenu(true)">Refresh menu</button>
         </template>
         <template v-if="overlay==='board'">
           <section class="order-status-group" v-for="status in statusOptions" :key="status" :aria-label="`${orderStatusLabels[status]} orders`"><div class="order-status-heading"><strong>{{ orderStatusLabels[status] }}</strong><span>{{ board.filter(o=>o.status===status).length }}</span></div><div class="order-chips"><span v-for="o in board.filter(b=>b.status===status)" :key="o.id" class="pill" :class="{ready:status==='Ready',served:status==='Served'||status==='Delivered'}">{{ o.number }}</span><small v-if="!board.some(o=>o.status===status)" class="muted">No orders</small></div></section>
@@ -152,6 +166,7 @@ async function leave(){
 .structured-store .game-stage{flex:1;min-height:0;background:#dab080}.structured-actions{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;padding:12px 14px 10px;background:#fffaf1;border-top:1px solid #e1ccb0;flex-shrink:0}.structured-actions button,.structured-actions a{min-width:0;min-height:59px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:#f7efe1;border:1px solid #e6d7c0;border-radius:12px;color:#86694a;text-decoration:none;font-size:10px;font-weight:800;box-shadow:none}.structured-actions button:hover,.structured-actions a:hover{background:#eee0c9;border-color:#cdb18b;color:#65462d}.structured-actions svg{width:20px;height:20px}.structured-actions button:focus-visible,.structured-actions a:focus-visible{outline:3px solid #6c875d;outline-offset:2px}
 .structured-store .structured-hint{background:#fffaf1!important;color:#a08a70;font-size:9px;padding:0 12px 12px!important;flex-shrink:0}.structured-notice{border-bottom:1px solid #d3dfc0;flex-shrink:0}.structured-notice strong{font-size:11px!important;font-weight:700;color:#577149}.structured-notice button{padding:4px 7px;border:0;background:transparent;box-shadow:none;color:#70845b}.structured-store .overlay-shade{padding:14px;background:#33271985;backdrop-filter:blur(2px)}.structured-store .overlay-panel{padding:20px;background:#fffaf1;border:1px solid #ddcbb3;border-radius:20px;box-shadow:0 6px 24px #3c281e21;gap:16px}.structured-store .overlay-panel .section-head{font-size:19px;letter-spacing:-.04em;color:#533d2b}.structured-store .overlay-panel .btn.secondary{box-shadow:none;border-width:1px;background:#f4ead9}.structured-store .chat-messages{border:1px solid #e8dac5;background:#f7f0e4;padding:12px;height:220px}.structured-store .chat-line{font-size:12px;line-height:1.6}.structured-store .chat-line strong{color:#886748}.structured-store .privacy{margin:0;font-size:10px;line-height:1.7;color:#9b846a}.structured-store .overlay-panel .input{font-size:12px;border-width:1px;background:#fffdf7;padding:11px 12px}.structured-store .overlay-panel .pill{font-size:11px;padding:7px 10px}.structured-store>.page{min-height:0;flex:1;font-size:12px;color:#90775d}
 .structured-store .structured-hint{display:flex;align-items:center;justify-content:center;gap:8px;min-height:36px;padding:2px 12px 9px!important;line-height:1.3}.structured-hint span{min-width:0}.structured-store .yarn-toss{flex-shrink:0;min-height:27px;padding:3px 7px;border:1px solid #8b6888;border-radius:4px;background:#e6cfdf;box-shadow:2px 2px 0 #8b6888;color:#553e5a;font:700 9px Silkscreen,monospace;cursor:pointer}.structured-store .yarn-toss:focus-visible{outline:3px solid #6c875d;outline-offset:2px}.structured-store .yarn-toss:disabled{opacity:.5;cursor:default}
+.structured-store .game-stage :deep(canvas){touch-action:none}
 .game-shell .store-dialog{min-width:0;gap:14px;padding:18px;overscroll-behavior:contain}
 .game-shell .feedback-dialog{--feedback-padding:18px}.game-shell .feedback-dialog .dialog-header{position:sticky;top:calc(-1 * var(--feedback-padding));margin-top:calc(-1 * var(--feedback-padding));padding-top:var(--feedback-padding);z-index:1;background:#fff3da}
 .dialog-header{display:grid;grid-template-columns:minmax(0,1fr) 36px;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid #e5d7c3}

@@ -116,6 +116,21 @@ export function savePendingOrderName(id:number,name:string){
   return getOrder(id)!
 }
 
+export function deletePendingCustomerOrder(id:number){
+  const connection=db()
+  return connection.transaction(()=>{
+    const order=getOrder(id)
+    if(!order)throw createError({statusCode:404,statusMessage:'Order not found'})
+    const customer=connection.prepare('SELECT confirmed_at FROM customer_orders WHERE order_id=?').get(id) as {confirmed_at:number|null}|undefined
+    if(!customer||customer.confirmed_at!==null)throw createError({statusCode:409,statusMessage:'Only pending customer orders can be deleted'})
+    connection.prepare('DELETE FROM order_messages WHERE order_id=?').run(id)
+    connection.prepare('DELETE FROM customer_order_items WHERE order_id=?').run(id)
+    connection.prepare('DELETE FROM customer_orders WHERE order_id=? AND confirmed_at IS NULL').run(id)
+    connection.prepare('DELETE FROM orders WHERE id=?').run(id)
+    return {number:order.order_number}
+  }).immediate()
+}
+
 export function postOrderMessage(id:number,role:'visitor'|'staff',text:unknown,visitorId?:number){
   customerOrder(id,visitorId)
   if(typeof text!=='string')throw createError({statusCode:400,statusMessage:'Message text is required'})

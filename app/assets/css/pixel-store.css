@@ -37,6 +37,8 @@
 .game-shell .order-chat-dialog .dialog-header,.game-shell .order-chat-dialog .chat-tabs,.game-shell .order-chat-dialog .order-inbox-list,.game-shell .order-chat-dialog .order-chat-summary,.game-shell .order-chat-dialog .chat-form,.game-shell .order-chat-dialog .privacy{flex-shrink:0}
 .game-shell .order-chat-dialog .order-chat-messages{flex:1;min-height:70px;height:auto;overflow-y:auto;overscroll-behavior:contain}
 .game-shell .chat-line{font-size:13px;line-height:1.7;padding-bottom:8px;border-bottom:1px dashed #cdb18a}.game-shell .chat-line strong{color:#815438}.chat-empty{font-size:12px;color:#806649}
+.game-shell .chat-messages .chat-line.staff-reply{margin:6px 0 10px;padding:9px 11px;border:2px solid #78945b;background:#e3efcf;color:#305039;box-shadow:2px 2px 0 #a9bc88;overflow-wrap:anywhere}
+.game-shell .chat-messages .chat-line.staff-reply strong{color:#25432d}
 .chat-staff-tag{display:inline-block;margin-right:6px;padding:2px 4px;border:1px solid #91aa6f;background:#d3e3b1;color:#3e5939;font-family:Silkscreen,monospace;font-size:8px;line-height:1.4;vertical-align:middle}
 .game-shell .store-dialog .privacy{font-family:'Courier New',monospace;font-size:11px;color:#7f684f;line-height:1.6}
 .order-status-group{border:2px solid #c7a576;border-radius:0;background:#f2e4c9;box-shadow:inset 2px 2px 0 #fffae9}

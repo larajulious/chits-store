@@ -68,6 +68,7 @@
 .order-table th,.order-table td{border-bottom:2px solid #dfc9a4}
 .order-table thead th{color:#674731;font-family:Silkscreen,monospace;font-size:9px;font-weight:400;letter-spacing:0}
 .order-table tbody tr:hover{background:#f3e5c8}
+.order-row-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.order-row-actions .btn{margin:0}.admin-page .pending-delete,.admin-page .pending-delete-confirm{border-color:#914e3d;background:#f3dbce;color:#773b2f}.admin-page .pending-delete:hover,.admin-page .pending-delete-confirm:hover{background:#eec9b8}
 .order-number{font-size:11px;color:#674731}
 .order-created time{color:#715a43}
 .order-created time span:last-child{color:#80694f}

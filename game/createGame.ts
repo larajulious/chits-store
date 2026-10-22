@@ -226,7 +226,7 @@ class StoreScene extends Phaser.Scene {
     this.cashier=cashier
     this.staff=[{sprite:chef,avatar:'chef',phase:characterPhase('chef')},{sprite:cashier,avatar:'cashier',phase:characterPhase('cashier')}]
     this.add.text(92,190,'CHEF',{fontFamily:'monospace',fontSize:'10px',color:'#674530'}).setOrigin(.5)
-    this.add.text(177,160,'CASHIER',{fontFamily:'monospace',fontSize:'10px',color:'#674530'}).setOrigin(.5)
+    this.add.text(177,160,'STAFF',{fontFamily:'monospace',fontSize:'10px',color:'#674530'}).setOrigin(.5)
     // Enter beside the visitor so the larger sprites and name tags stay separate.
     if(this.opts.guideEnabled!==false){
       const guideSprite=this.add.image(this.opts.reducedMotion?180:235,this.opts.reducedMotion?440:535,'menu-guide').setDepth(550).setScale(VISITOR_SCALE)

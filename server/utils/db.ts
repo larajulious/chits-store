@@ -15,7 +15,7 @@ export type VisitorRow = {
 export type OrderRow = {
   id: number
   order_number: string
-  status: Exclude<Status,'Delivered'>
+  status: Exclude<Status,'Delivered'|'Pending'>
   token_hash: string
   nickname: string | null
   avatar_key: string | null
@@ -87,12 +87,47 @@ export function db() {
         updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS daily_menu_date_idx ON daily_menu(service_date, id);
+      CREATE TABLE IF NOT EXISTS customer_orders (
+        order_id INTEGER PRIMARY KEY,
+        visitor_id INTEGER NOT NULL,
+        service_date TEXT NOT NULL,
+        total_centavos INTEGER NOT NULL CHECK (total_centavos > 0),
+        confirmed_at INTEGER,
+        staff_read_message_id INTEGER NOT NULL DEFAULT 0,
+        visitor_read_message_id INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS customer_orders_visitor_idx ON customer_orders(visitor_id, order_id DESC);
+      CREATE TABLE IF NOT EXISTS customer_order_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL,
+        menu_item_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        price_centavos INTEGER NOT NULL,
+        quantity INTEGER NOT NULL,
+        line_total_centavos INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS customer_order_items_order_idx ON customer_order_items(order_id, id);
+      CREATE TABLE IF NOT EXISTS order_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('visitor','staff','system')),
+        text TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS order_messages_order_idx ON order_messages(order_id, id);
     `)
     // Add completion without rebuilding legacy tables or changing their status CHECK.
     const connection=database
     connection.transaction(()=>{
       const columns=connection.pragma('table_info(orders)') as {name:string}[]
       if(!columns.some(column=>column.name==='delivered_at'))connection.exec('ALTER TABLE orders ADD COLUMN delivered_at INTEGER')
+      const customerColumns=connection.pragma('table_info(customer_orders)') as {name:string}[]
+      if(!customerColumns.some(column=>column.name==='confirmed_at')){
+        connection.exec('ALTER TABLE customer_orders ADD COLUMN confirmed_at INTEGER')
+        // Orders placed before confirmation existed were already Preparing.
+        connection.exec('UPDATE customer_orders SET confirmed_at=created_at')
+      }
     }).immediate()
   }
   return database
@@ -100,4 +135,4 @@ export function db() {
 export const getOrder = (id: number) => db().prepare('SELECT * FROM orders WHERE id = ?').get(id) as OrderRow | undefined
 export const getVisitor = (id: number) => db().prepare('SELECT * FROM visitors WHERE id = ?').get(id) as VisitorRow | undefined
 export const activeVisitor = (visitor: VisitorRow | undefined) => Boolean(visitor && !visitor.revoked_at && Date.now() - visitor.last_seen_at < 7 * 24 * 60 * 60_000)
-export const publicOrder = (row: OrderRow) => ({ id: row.id, number: row.order_number, name:row.nickname, status:row.status==='Served'&&row.delivered_at!=null?'Delivered' as const:row.status })
+export const publicOrder = (row: OrderRow,pending=false) => ({ id: row.id, number: row.order_number, name:row.nickname, status:pending?'Pending' as const:row.status==='Served'&&row.delivered_at!=null?'Delivered' as const:row.status })

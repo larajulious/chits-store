@@ -6,8 +6,8 @@ const choices:[ResetOption,string,string][]=[
   ['menu',"Today's menu items",'Clear today’s food list and prices.'],
   ['orders','Orders and order numbers','Delete every order; the next order starts at 100.'],
   ['feedback','Suggestions and reviews','Delete pending, approved, and past feedback.'],
-  ['chat','Chat history','Clear the current public conversation for everyone.'],
-  ['visitors','Visitor sessions','Send everyone to the entrance and require a new avatar.'],
+  ['chat','Chat history','Clear the public conversation and private order messages.'],
+  ['visitors','Visitor sessions','Send everyone to the entrance. Existing customers will lose access to their private order inboxes.'],
 ]
 const selected=ref<ResetOption[]>([]),confirmation=ref(''),busy=ref(false),error=ref('')
 function open(){dialog.value?.showModal()}

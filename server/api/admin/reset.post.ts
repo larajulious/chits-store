@@ -22,8 +22,15 @@ export default defineEventHandler(async event=>{
   connection.transaction(()=>{
     if(selected.has('menu'))connection.prepare('DELETE FROM daily_menu WHERE service_date=?').run(todayInManila())
     if(selected.has('orders')){
+      connection.prepare('DELETE FROM order_messages').run()
+      connection.prepare('DELETE FROM customer_order_items').run()
+      connection.prepare('DELETE FROM customer_orders').run()
       connection.prepare('DELETE FROM orders').run()
       connection.prepare('DELETE FROM order_sequence').run()
+    }
+    else if(selected.has('chat')){
+      connection.prepare('DELETE FROM order_messages').run()
+      connection.prepare('UPDATE customer_orders SET staff_read_message_id=0,visitor_read_message_id=0').run()
     }
     if(selected.has('feedback'))connection.prepare('DELETE FROM feedback').run()
     // Keep AUTOINCREMENT counters so an old cookie can never refer to a new visitor.

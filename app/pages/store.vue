@@ -4,6 +4,7 @@ import { isAvatar } from '../../shared/avatars'
 import { reactionOptions } from '../../shared/reactions'
 import { orderStatusLabels,type OrderStatus } from '../../shared/order-status'
 import type { ChatMessage } from '../../shared/chat'
+import type { CustomerOrderSummary, CustomerOrderDetail } from '../../shared/customer-order'
 import {playChatSound} from '../utils/chatSound'
 const route=useRoute()
 const featureConfig=useRuntimeConfig().public
@@ -16,6 +17,15 @@ type MenuState = { date:string; version:string; items:{id:number;name:string;pri
 type Me = { nickname:string; avatar:string }
 const me=ref<Me|null>(null), board=ref<PublicOrder[]>([]), players=ref<Player[]>([]), selfId=ref('')
 const menu=ref<MenuState>({date:'',version:'',items:[]}),menuLoading=ref(false),menuError=ref('')
+const cart=ref<Record<number,number>>({}),placingOrder=ref(false),checkoutError=ref('')
+const checkoutDialog=ref<HTMLDialogElement|null>(null)
+const myOrders=ref<CustomerOrderSummary[]>([]),selectedOrderId=ref<number|null>(null),orderDetail=ref<CustomerOrderDetail|null>(null),orderMessage=ref(''),orderSending=ref(false),orderChatError=ref(''),orderInboxLoading=ref(false),chatTab=ref<'community'|'orders'>('community')
+const cartLines=computed(()=>menu.value.items.filter(item=>(cart.value[item.id]??0)>0).map(item=>({...item,quantity:cart.value[item.id]!,lineTotalCentavos:item.priceCentavos*cart.value[item.id]!})))
+const cartTotal=computed(()=>cartLines.value.reduce((sum,item)=>sum+item.lineTotalCentavos,0))
+const privateUnread=computed(()=>myOrders.value.reduce((sum,order)=>sum+order.unread,0))
+const allUnread=computed(()=>unreadChat.value+privateUnread.value)
+const featuredOrder=computed(()=>myOrders.value.find(order=>order.unread>0)||myOrders.value[0])
+let inboxInitialized=false,inboxPolling=false
 let menuStale=true,menuEpoch=0,wantedMenuVersion:string|null=null,hasWelcomed=false,hiddenAt=0
 let menuReloadAfterCurrent=false
 const menuDate=computed(()=>menu.value.date===manilaDate()?new Date(`${menu.value.date}T12:00:00`).toLocaleDateString('en-PH',{month:'long',day:'numeric'}):'today')
@@ -30,19 +40,20 @@ const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:s
 const leaveDialog=ref<{open:()=>void;close:()=>void}|null>(null),leaving=ref(false)
 const visitThanks=useState<boolean>('visit-thanks',()=>false)
 const feedbackBox=ref<{refresh:()=>Promise<void>}|null>(null)
-let socket:WebSocket|null=null, alive=true, reconnect:ReturnType<typeof setTimeout>|undefined, heartbeat:ReturnType<typeof setInterval>|undefined,boardRefresh:ReturnType<typeof setInterval>|undefined,menuDayTimer:ReturnType<typeof setTimeout>|undefined
+const orderFeed=ref<HTMLElement|null>(null)
+let socket:WebSocket|null=null, alive=true, reconnect:ReturnType<typeof setTimeout>|undefined, heartbeat:ReturnType<typeof setInterval>|undefined,boardRefresh:ReturnType<typeof setInterval>|undefined,inboxTimer:ReturnType<typeof setInterval>|undefined,menuDayTimer:ReturnType<typeof setTimeout>|undefined
 const preparing=computed(()=>board.value.filter(o=>o.status==='Preparing').length)
 const ready=computed(()=>board.value.filter(o=>o.status==='Ready').length)
 const headerTime=computed(()=>new Date().getHours()<12?'Good morning!':new Date().getHours()<18?'Good afternoon!':'Good evening!')
 const statusOptions:Status[]=['Preparing','Ready','Served','Delivered']
-watch(overlay,value=>{if(value==='chat')unreadChat.value=0})
+watch([overlay,chatTab],([value,tab])=>{if(value==='chat'&&tab==='community')unreadChat.value=0})
 onMounted(async()=>{
   document.addEventListener('visibilitychange',onVisibilityChanged)
   scheduleNextMenuDay()
-  try { me.value=await $fetch<Me>('/api/me');if(alive)setupMusic();void loadMenu();await loadBoard();if(alive){connect();boardRefresh=setInterval(()=>void loadBoard(),30_000)} }
+  try { me.value=await $fetch<Me>('/api/me');if(alive)setupMusic();void loadMenu();await Promise.all([loadBoard(),loadOrderInbox()]);if(alive){connect();boardRefresh=setInterval(()=>void loadBoard(),30_000);inboxTimer=setInterval(()=>void pollOrderInbox(),3000)} }
   catch { void returnHome() }
 })
-onBeforeUnmount(()=>{alive=false;document.removeEventListener('visibilitychange',onVisibilityChanged);stopMusic();clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearTimeout(menuDayTimer);socket?.close()})
+onBeforeUnmount(()=>{alive=false;document.removeEventListener('visibilitychange',onVisibilityChanged);stopMusic();clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearInterval(inboxTimer);clearTimeout(menuDayTimer);socket?.close()})
 function listenForMusicGesture(){
   if(musicGestureListening)return
   document.addEventListener('pointerdown',onMusicGesture)
@@ -86,6 +97,58 @@ function toggleMusic(){
 }
 function stopMusic(){music?.pause();music=undefined;musicPlaying.value=false;stopListeningForMusicGesture()}
 async function loadBoard(){try{board.value=await $fetch<PublicOrder[]>('/api/orders/board')}catch{}}
+function money(cents:number){return `₱${(cents/100).toFixed(2)}`}
+function changeQuantity(id:number,amount:number){const next=Math.max(0,Math.min(20,(cart.value[id]||0)+amount));cart.value={...cart.value,[id]:next};checkoutError.value=''}
+function openCheckoutConfirmation(){
+  if(placingOrder.value||menuLoading.value||!cartLines.value.length||!hasCurrentMenu.value)return
+  checkoutError.value=''
+  checkoutDialog.value?.showModal()
+}
+async function placeOrder(){
+  if(!checkoutDialog.value?.open||placingOrder.value||menuLoading.value||!cartLines.value.length||!hasCurrentMenu.value)return
+  placingOrder.value=true;checkoutError.value=''
+  try{
+    const detail=await $fetch<CustomerOrderDetail>('/api/orders',{method:'POST',body:{items:cartLines.value.map(item=>({id:item.id,quantity:item.quantity}))}})
+    checkoutDialog.value?.close()
+    cart.value={};orderDetail.value=detail;selectedOrderId.value=detail.order.id;chatTab.value='orders';overlay.value='chat'
+    await scrollOrderMessages()
+    notice.value=`Order request #${detail.order.number} sent · ${money(detail.order.totalCentavos)}. Waiting for staff confirmation.`
+    await Promise.all([loadOrderInbox(),loadBoard()])
+  }catch(e:any){checkoutDialog.value?.close();checkoutError.value=e?.data?.statusMessage||'Could not place your order. Please try again.';menuStale=true;void loadMenu(true)}
+  finally{placingOrder.value=false}
+}
+async function loadOrderInbox(){
+  if(!alive||inboxPolling)return
+  inboxPolling=true
+  try{
+    const next=await $fetch<CustomerOrderSummary[]>('/api/orders/mine')
+    if(!alive)return
+    const unread=next.reduce((sum,order)=>sum+order.unread,0)
+    if(inboxInitialized&&unread>privateUnread.value&&!document.hidden)playChatSound()
+    inboxInitialized=true;myOrders.value=next
+    if(selectedOrderId.value&&!next.some(order=>order.id===selectedOrderId.value)){selectedOrderId.value=null;orderDetail.value=null}
+  }catch{}finally{inboxPolling=false}
+}
+async function pollOrderInbox(){
+  if(document.hidden||(!myOrders.value.length&&!(overlay.value==='chat'&&chatTab.value==='orders')))return
+  await loadOrderInbox()
+  if(overlay.value==='chat'&&chatTab.value==='orders'&&selectedOrderId.value)await loadOrderDetail(selectedOrderId.value)
+}
+async function loadOrderDetail(id:number){
+  try{const detail=await $fetch<CustomerOrderDetail>(`/api/orders/${id}`);if(selectedOrderId.value!==id||!alive)return;const previous=orderDetail.value?.messages.at(-1)?.id;orderDetail.value=detail;myOrders.value=myOrders.value.map(order=>order.id===id?{...order,unread:0,status:detail.order.status}:order);if(previous!==detail.messages.at(-1)?.id)await scrollOrderMessages()}
+  catch(e:any){orderChatError.value=e?.data?.statusMessage||'Could not load this conversation.'}
+}
+async function openOrder(id:number){selectedOrderId.value=id;orderDetail.value=null;orderChatError.value='';orderInboxLoading.value=true;await loadOrderDetail(id);orderInboxLoading.value=false}
+async function openOrderInbox(id:number){chatTab.value='orders';overlay.value='chat';await openOrder(id)}
+async function scrollOrderMessages(){await nextTick();if(orderFeed.value)orderFeed.value.scrollTop=orderFeed.value.scrollHeight}
+async function sendOrderChat(){
+  const text=orderMessage.value.trim(),id=selectedOrderId.value
+  if(orderSending.value||!id||!text||text.length>500)return
+  orderSending.value=true;orderChatError.value=''
+  try{const detail=await $fetch<CustomerOrderDetail>(`/api/orders/${id}/messages`,{method:'POST',body:{text}});orderMessage.value='';orderDetail.value=detail;await scrollOrderMessages();await loadOrderInbox()}
+  catch(e:any){orderChatError.value=e?.data?.statusMessage||'Could not send your message.'}
+  finally{orderSending.value=false}
+}
 function manilaDate(){
   const parts=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date())
   const value=(type:string)=>parts.find(part=>part.type===type)?.value
@@ -110,6 +173,7 @@ async function loadMenu(force=false){
   try{
     const current=await $fetch<MenuState>('/api/menu/today')
     if(!alive)return
+    if(menu.value.version&&menu.value.version!==current.version&&Object.values(cart.value).some(Boolean)){cart.value={};checkoutError.value='Today’s menu changed. Please choose your items again.'}
     menu.value=current
     menuStale=(startedAtEpoch!==menuEpoch&&(!wantedMenuVersion||current.version!==wantedMenuVersion))||current.date!==manilaDate()
     if(!menuStale)wantedMenuVersion=null
@@ -127,7 +191,8 @@ function onMenuUpdated(version:unknown){
 }
 function onVisibilityChanged(){
   if(document.hidden){music?.pause();musicPlaying.value=false;hiddenAt=Date.now();return}
-  if(overlay.value==='chat')unreadChat.value=0
+  if(overlay.value==='chat'&&chatTab.value==='community')unreadChat.value=0
+  void loadOrderInbox()
   if(!musicMuted.value){listenForMusicGesture();void startMusic()}
   if(menuStale||menu.value.date!==manilaDate()||(hiddenAt&&Date.now()-hiddenAt>5000)){
     menuStale=true;menuEpoch++;void loadMenu(true)
@@ -138,7 +203,7 @@ async function returnHome(){
   if(!alive||returningHome.value)return
   returningHome.value=true
   stopMusic()
-  clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearTimeout(menuDayTimer)
+  clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearInterval(inboxTimer);clearTimeout(menuDayTimer)
   const current=socket;socket=null;current?.close()
   try{const result=await navigateTo('/',{replace:true});if(result===false)window.location.replace('/')}
   catch{window.location.replace('/')}
@@ -169,7 +234,7 @@ function connect(){
       const entry:ChatMessage={messageId:data.messageId,id:data.id,nickname:data.nickname,text:data.text,at:data.at,role:data.role==='staff'?'staff':'visitor'}
       chat.value=[...chat.value.slice(-49),entry]
       if(entry.id!==selfId.value){
-        if(overlay.value!=='chat'||document.hidden)unreadChat.value=Math.min(99,unreadChat.value+1)
+        if(overlay.value!=='chat'||chatTab.value!=='community'||document.hidden)unreadChat.value=Math.min(99,unreadChat.value+1)
         if(!document.hidden)playChatSound()
       }
       if(entry.role==='staff')game.value?.showStaffBubble(entry.text)
@@ -181,9 +246,14 @@ function connect(){
     if(data.type==='menu:updated'||data.type==='menu_changed')onMenuUpdated(data.version)
     if(data.type==='order_changed'){
       await loadBoard()
-      if(data.order?.status==='Ready') notice.value=`🔔 ${data.order.number} is ready!`
-      if(data.order?.status==='Served') notice.value=`🍡 ${data.order.number} is out for delivery.`
-      if(data.order?.status==='Delivered') notice.value=`✓ ${data.order.number} has been delivered. Thank you!`
+      if(myOrders.value.some(order=>order.id===data.order?.id)){
+        const previous=myOrders.value.find(order=>order.id===data.order?.id)?.status
+        void loadOrderInbox()
+        if(previous==='Pending'&&data.order?.status==='Preparing') notice.value=`✓ Staff confirmed order #${data.order.number}. Preparing now!`
+        if(data.order?.status==='Ready') notice.value=`🔔 Your order #${data.order.number} is ready!`
+        if(data.order?.status==='Served') notice.value=`🍡 Your order #${data.order.number} is out for delivery.`
+        if(data.order?.status==='Delivered') notice.value=`✓ Your order #${data.order.number} has been delivered. Thank you!`
+      }
     }
     if(data.type==='chat_enabled'){chatEnabled.value=data.enabled}
     if(data.type==='chat_blocked')notice.value='Chat is unavailable right now.'
@@ -202,6 +272,7 @@ function connect(){
 }
 function send(data:object){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(data))}
 function sendChat(){const text=message.value.trim();if(!connected.value||!text||text.length>160||!chatEnabled.value)return;send({type:'chat',text});message.value=''}
+function openChat(){chatTab.value='community';overlay.value='chat'}
 function interact(kind:string){overlay.value=kind;if(kind==='menu')void loadMenu()}
 function petCat(){if(game.value?.petCat()==='too_far')notice.value='Walk closer to Miming to pet the cat.'}
 async function leave(){
@@ -221,8 +292,9 @@ async function leave(){
     <div class="game-stage">
       <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact" @cat-hint="notice='Walk closer to Miming to pet the cat.'"/></ClientOnly>
     </div>
+    <button v-if="featuredOrder" type="button" class="order-inbox-shortcut" :class="{'has-reply':privateUnread>0}" :aria-label="privateUnread?`Order inbox, ${privateUnread} unread staff ${privateUnread===1?'reply':'replies'}. Open order ${featuredOrder.number}`:`Open order inbox for order ${featuredOrder.number}`" @click="openOrderInbox(featuredOrder.id)"><span class="order-inbox-shortcut-icon"><StoreGlyph name="chat"/><span v-if="privateUnread" class="order-inbox-shortcut-count" aria-hidden="true">{{ privateUnread>9?'9+':privateUnread }}</span></span><span class="order-inbox-shortcut-copy"><strong>{{ privateUnread?'New reply from staff':'Your order inbox' }}</strong><small>Order #{{ featuredOrder.number }}{{ featuredOrder.name?` · ${featuredOrder.name}`:'' }} · {{ orderStatusLabels[featuredOrder.status] }}</small></span><span class="order-inbox-shortcut-action">{{ privateUnread?'Read reply':'Open inbox' }} →</span></button>
     <nav class="structured-actions" aria-label="Store actions">
-      <button type="button" class="store-chat-action" aria-label="Chat" :aria-describedby="unreadChat?'store-chat-unread':undefined" @click="overlay='chat'"><StoreGlyph name="chat"/><span>Chat</span><span v-if="unreadChat" class="chat-unread-badge" aria-hidden="true">{{ unreadChat>9?'9+':unreadChat }}</span><span id="store-chat-unread" class="chat-sr-only">{{ unreadChat }} unread {{ unreadChat===1?'message':'messages' }}</span></button>
+      <button type="button" class="store-chat-action" aria-label="Chat" :aria-describedby="allUnread?'store-chat-unread':undefined" @click="openChat"><StoreGlyph name="chat"/><span>Chat</span><span v-if="allUnread" class="chat-unread-badge" aria-hidden="true">{{ allUnread>9?'9+':allUnread }}</span><span id="store-chat-unread" class="chat-sr-only">{{ allUnread }} unread {{ allUnread===1?'message':'messages' }}</span></button>
       <button type="button" @click="interact('menu')"><StoreGlyph name="menu"/><span>Menu</span></button>
       <button type="button" @click="overlay='board'"><StoreGlyph name="orders"/><span>Orders</span></button>
       <button type="button" @click="overlay='emotes'"><StoreGlyph name="smile"/><span>Emotes</span></button>
@@ -231,31 +303,51 @@ async function leave(){
     </nav>
     <div v-if="catEnabled" class="help-text structured-hint" style="background:#fff7e8;text-align:center;padding-bottom:9px"><span>Drag yarn · tap Miming to pet</span><button type="button" class="yarn-toss" :disabled="!!overlay" @click="petCat">Pet cat</button><button type="button" class="yarn-toss" aria-label="Toss yarn for Miming the shop cat" :disabled="!!overlay" @click="game?.tossYarn()">Toss yarn</button></div>
     <div v-if="overlay" class="overlay-shade" :class="{'chat-overlay':overlay==='chat'}" @click.self="overlay=''">
-      <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback','chat-dialog':overlay==='chat'}" role="dialog" aria-labelledby="store-dialog-title">
-        <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ {chat:'Community Chat',menu:"Today's Menu",board:'Live Order Board',cashier:'Cashier',chef:'Chef',seat:'Take a Seat',emotes:'Reactions',feedback:'Feedback box'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
+      <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback','chat-dialog':overlay==='chat','order-chat-dialog':overlay==='chat'&&chatTab==='orders'&&!!selectedOrderId}" role="dialog" aria-labelledby="store-dialog-title">
+        <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ overlay==='chat'?(chatTab==='orders'?'Order inbox':'Community chat'):{menu:"Today's Menu",board:'Live Order Board',cashier:'Staff',chef:'Chef',seat:'Take a Seat',emotes:'Reactions',feedback:'Feedback box'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
         <FeedbackBox v-if="overlay==='feedback'" ref="feedbackBox"/>
         <template v-if="overlay==='menu'">
           <p class="menu-greeting">🍡 Hi, {{ me.nickname }}! Here’s the meryenda for {{ menuDate }}.</p>
           <p v-if="!hasCurrentMenu&&menuLoading" class="menu-message">Checking today’s menu…</p>
           <p v-else-if="!hasCurrentMenu&&menuError" class="menu-message" role="alert">{{ menuError }}</p>
           <p v-else-if="!hasCurrentMenu||!menu.items.length" class="menu-message">Today’s menu hasn’t been posted yet. Please check back soon!</p>
-          <ul v-else class="visitor-menu"><li v-for="item in menu.items" :key="item.id"><span>{{ item.name }}</span><strong>₱{{ (item.priceCentavos/100).toFixed(2) }}</strong></li></ul>
+          <ul v-else class="visitor-menu"><li v-for="item in menu.items" :key="item.id"><div class="menu-item-label"><span>{{ item.name }}</span><strong>{{ money(item.priceCentavos) }}</strong></div><div class="menu-quantity"><button type="button" :aria-label="`Remove one ${item.name}`" :disabled="!cart[item.id]||placingOrder" @click="changeQuantity(item.id,-1)">−</button><span :aria-label="`${cart[item.id]||0} in cart`">{{ cart[item.id]||0 }}</span><button type="button" :aria-label="`Add one ${item.name}`" :disabled="(cart[item.id]||0)>=20||placingOrder" @click="changeQuantity(item.id,1)">+</button></div></li></ul>
+          <div v-if="cartLines.length" class="cart-summary"><strong>Your cart</strong><div v-for="item in cartLines" :key="item.id"><span>{{ item.quantity }} × {{ item.name }}</span><span>{{ money(item.lineTotalCentavos) }}</span></div><div class="cart-total"><strong>Total</strong><strong>{{ money(cartTotal) }}</strong></div><p class="privacy">Staff will confirm your request before preparing it.</p><button type="button" class="btn" :disabled="placingOrder||menuLoading||!hasCurrentMenu" @click="openCheckoutConfirmation">Send order request</button></div>
+          <p v-if="checkoutError" class="error" role="alert">{{ checkoutError }}</p>
           <p v-if="hasCurrentMenu&&menuLoading" class="menu-message">Updating today’s menu…</p>
           <p v-if="hasCurrentMenu&&menuError" class="menu-message" role="alert">{{ menuError }}</p>
           <button type="button" class="btn small secondary dialog-action" :disabled="menuLoading" @click="loadMenu(true)">Refresh menu</button>
         </template>
         <template v-if="overlay==='board'">
           <section class="order-status-group" v-for="status in statusOptions" :key="status" :aria-label="`${orderStatusLabels[status]} orders`"><div class="order-status-heading"><strong>{{ orderStatusLabels[status] }}</strong><span>{{ board.filter(o=>o.status===status).length }}</span></div><div class="order-chips"><span v-for="o in board.filter(b=>b.status===status)" :key="o.id" class="pill" :class="{ready:status==='Ready',served:status==='Served'||status==='Delivered'}"><strong>{{ o.number }}</strong><small v-if="o.name">{{ o.name }}</small></span><small v-if="!board.some(o=>o.status===status)" class="muted">No orders</small></div></section>
-          <p class="privacy">Order numbers and names added by staff are visible to everyone here. If you have questions about your order, contact the store through Messenger.</p>
+          <p class="privacy">Order numbers and names added by staff are visible to everyone here. For an order you placed, open Chat → Order inbox to message staff privately.</p>
           <button class="btn small secondary dialog-action" @click="loadBoard">Refresh board</button>
         </template>
         <template v-else-if="overlay==='cashier'"><p>🍮 {{ headerTime }} Welcome to Chits Store, {{ me.nickname }}!</p><p>{{ preparing }} order(s) preparing · {{ ready }} ready. You can check the live board anytime.</p><button class="btn small dialog-action" @click="overlay='board'">View orders</button><p class="help-text">Tap anywhere on the floor or use the joystick to move. Tap the chef or order board to interact.</p></template>
         <template v-else-if="overlay==='chef'"><p>👨‍🍳 🍡 {{ preparing ? 'Stirring up tasty orders right now!' : 'Trying a fresh batch of meryenda!' }}</p><p class="help-text">Only staff can change real order statuses.</p></template>
         <template v-else-if="overlay==='seat'"><p>☕ Make yourself comfortable! Say hi to everyone while you wait.</p><button class="btn small dialog-action" @click="overlay='chat'">Join conversation</button></template>
         <template v-else-if="overlay==='emotes'"><div class="reaction-grid"><button v-for="reaction in reactionOptions" :key="reaction.emoji" type="button" class="btn secondary reaction-choice" @click="send({type:'emote',emoji:reaction.emoji});overlay=''"><PixelReaction class="reaction-symbol" :emoji="reaction.emoji"/><span>{{ reaction.label }}</span></button></div></template>
-        <template v-else-if="overlay==='chat'"><div class="chat-messages" aria-live="polite"><div v-if="chat.length===0" class="muted help-text chat-empty">Say hello! Chat messages are temporary.</div><div v-for="c in chat" :key="c.messageId" class="chat-line"><span v-if="c.role==='staff'" class="chat-staff-tag">STAFF</span><strong>{{ c.nickname }}:</strong> {{ c.text }}</div></div><form class="chat-form" @submit.prevent="sendChat"><input v-model="message" class="input" maxlength="160" aria-label="Chat message" placeholder="Say hi..." autocomplete="off"><button class="btn small" type="submit" :disabled="!connected||!message.trim()||!chatEnabled">Send</button></form><p v-if="!chatEnabled" class="privacy">Chat is temporarily disabled by staff.</p><p class="privacy">Public room: do not share personal details. Staff can mute or remove visitors. Chat is not permanently stored.</p></template>
+        <template v-else-if="overlay==='chat'">
+          <div class="chat-tabs" role="tablist" aria-label="Chat conversations"><button type="button" role="tab" :aria-selected="chatTab==='community'" @click="chatTab='community'">Community <span v-if="unreadChat">{{ unreadChat }}</span></button><button type="button" role="tab" :aria-selected="chatTab==='orders'" @click="chatTab='orders';void loadOrderInbox()">Order inbox <span v-if="privateUnread">{{ privateUnread }}</span></button></div>
+          <template v-if="chatTab==='community'"><div class="chat-messages" aria-live="polite"><div v-if="chat.length===0" class="muted help-text chat-empty">Say hello! Chat messages are temporary.</div><div v-for="c in chat" :key="c.messageId" class="chat-line"><span v-if="c.role==='staff'" class="chat-staff-tag">STAFF</span><strong>{{ c.nickname }}:</strong> {{ c.text }}</div></div><form class="chat-form" @submit.prevent="sendChat"><input v-model="message" class="input" maxlength="160" aria-label="Chat message" placeholder="Say hi..." autocomplete="off"><button class="btn small" type="submit" :disabled="!connected||!message.trim()||!chatEnabled">Send</button></form><p v-if="!chatEnabled" class="privacy">Chat is temporarily disabled by staff.</p><p class="privacy">Public room: do not share personal details. Staff can mute or remove visitors. Chat is not permanently stored.</p></template>
+          <template v-else><div v-if="myOrders.length" class="order-inbox-list"><button v-for="order in myOrders" :key="order.id" type="button" :class="{selected:selectedOrderId===order.id}" @click="openOrder(order.id)"><strong>#{{ order.number }} <span v-if="order.unread" class="order-inbox-unread">{{ order.unread }}</span></strong><small>{{ orderStatusLabels[order.status] }} · {{ money(order.totalCentavos) }}</small></button></div><p v-else class="menu-message">Your placed orders will appear here. Choose items from Today’s Menu to start.</p>
+            <p v-if="orderInboxLoading" class="help-text">Opening order conversation…</p>
+            <template v-if="orderDetail&&selectedOrderId===orderDetail.order.id"><details class="order-chat-summary"><summary><span><strong>Order #{{ orderDetail.order.number }}{{ orderDetail.order.name?` · ${orderDetail.order.name}`:'' }}</strong> · {{ orderStatusLabels[orderDetail.order.status] }} · {{ money(orderDetail.order.totalCentavos) }}</span><small>Items ▾</small></summary><div v-for="item in orderDetail.items" :key="item.id"><span>{{ item.quantity }} × {{ item.name }}</span><span>{{ money(item.lineTotalCentavos) }}</span></div></details><div ref="orderFeed" class="chat-messages order-chat-messages" role="log" aria-label="Private order conversation" aria-live="polite"><div v-for="entry in orderDetail.messages" :key="entry.id" class="chat-line"><strong>{{ entry.role==='system'?'Order':entry.role==='staff'?'Chits Store':'You' }}:</strong> {{ entry.text }}</div></div><form class="chat-form" @submit.prevent="sendOrderChat"><input v-model="orderMessage" class="input" maxlength="500" aria-label="Message staff about this order" placeholder="Message staff about this order…" autocomplete="off"><button class="btn small" type="submit" :disabled="orderSending||!orderMessage.trim()">{{ orderSending?'Sending…':'Send' }}</button></form><p class="privacy">Only you and store staff can see this order conversation.</p></template>
+            <p v-if="orderChatError" class="error" role="alert">{{ orderChatError }}</p>
+          </template>
+        </template>
       </section>
     </div>
+    <dialog ref="checkoutDialog" class="checkout-confirmation" aria-labelledby="checkout-confirmation-title" aria-describedby="checkout-confirmation-description" @cancel="placingOrder&&$event.preventDefault()">
+      <form class="checkout-confirmation-content" @submit.prevent="placeOrder">
+        <h2 id="checkout-confirmation-title">Confirm your order</h2>
+        <p id="checkout-confirmation-description">Please check your items before sending the request to staff.</p>
+        <div class="checkout-confirmation-items"><div v-for="item in cartLines" :key="item.id"><span>{{ item.quantity }} × {{ item.name }}</span><strong>{{ money(item.lineTotalCentavos) }}</strong></div></div>
+        <div class="checkout-confirmation-total"><span>Total</span><strong>{{ money(cartTotal) }}</strong></div>
+        <p class="checkout-confirmation-note">Staff will confirm your request before preparing it. You can message them in your order inbox.</p>
+        <div class="checkout-confirmation-actions"><button type="button" class="btn secondary" :disabled="placingOrder" @click="checkoutDialog?.close()">Back to menu</button><button type="submit" class="btn" :disabled="placingOrder||menuLoading||!cartLines.length||!hasCurrentMenu">{{ placingOrder?'Sending…':'Confirm & send' }}</button></div>
+      </form>
+    </dialog>
   </template>
   <div v-else class="page">{{ returningHome?'Returning to welcome...':'Opening the bakery...' }}</div>
   <VisitDialog ref="leaveDialog" variant="leave" :busy="leaving" @confirm="leave"/>
@@ -291,6 +383,26 @@ async function leave(){
 @media(max-width:599px){.game-shell .feedback-dialog{--feedback-padding:16px}.structured-store{height:100dvh;min-height:520px;width:100%;max-height:none;margin:0;border:0;border-radius:0;box-shadow:none}.structured-store-top{padding:14px 16px}.bakery-status-strip{padding:10px 16px}.structured-actions{padding-inline:12px;gap:7px}.structured-store .overlay-panel{max-height:min(78dvh,600px)}.game-shell .overlay-shade{padding:12px}.game-shell .store-dialog{padding:16px;gap:12px}.game-shell .dialog-header .section-head{font-size:18px}.reaction-grid{gap:6px}}
 @media(max-width:360px){.structured-actions{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:7px}.structured-actions button{min-height:43px;flex-direction:row;gap:4px}.structured-actions svg{width:17px;height:17px}}
 @media(prefers-reduced-motion:reduce){.structured-store .overlay-shade{backdrop-filter:none}}
+.visitor-menu li{align-items:center}.menu-item-label{display:grid;gap:3px;min-width:0}.menu-item-label span{font-weight:700}.menu-quantity{display:flex;align-items:center;gap:7px;flex-shrink:0}.menu-quantity button{width:29px;height:29px;border:2px solid #765337;background:#fff5df;color:#674731;font:16px/1 Silkscreen,monospace}.menu-quantity>span{min-width:18px;text-align:center;font:11px Silkscreen,monospace}.cart-summary,.order-chat-summary{display:grid;gap:8px;padding:12px;border:2px solid #c7a576;background:#f5e8ce;font-size:12px}.cart-summary>div,.order-chat-summary>div{display:flex;justify-content:space-between;gap:10px}.cart-summary>div span:first-child,.order-chat-summary>div span:first-child{min-width:0;overflow-wrap:anywhere}.cart-summary .cart-total,.order-chat-summary .cart-total{padding-top:8px;border-top:1px dashed #b69464;font:11px Silkscreen,monospace}.cart-summary>.btn{width:100%;border-radius:0;font:11px Silkscreen,monospace}.chat-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px}.chat-tabs button{min-height:38px;border:2px solid #c7a576;background:#f5e8ce;color:#674731;font:10px Silkscreen,monospace}.chat-tabs button[aria-selected="true"]{background:#ddc399;border-color:#674731}.chat-tabs button span,.order-inbox-unread{display:inline-grid;place-items:center;min-width:17px;height:17px;padding:2px;background:#ad513f;color:#fff7e5;font:9px Silkscreen,monospace}.order-inbox-list{display:flex;gap:7px;overflow-x:auto;overscroll-behavior-x:contain;padding:2px 2px 7px}.order-inbox-list button{display:grid;gap:5px;flex:0 0 126px;min-height:56px;text-align:left;padding:7px;border:2px solid #c7a576;background:#fff7e5;color:#674731}.order-inbox-list button.selected{border-color:#674731;background:#e7d2ab}.order-inbox-list button strong{font:11px Silkscreen,monospace}.order-inbox-list button small{font:10px 'Courier New',monospace;line-height:1.4}.structured-store .order-chat-messages{height:clamp(100px,20dvh,180px)}
+.game-shell .store-dialog.order-chat-dialog{max-height:min(78dvh,620px)}
+.order-inbox-shortcut{display:flex;align-items:center;gap:11px;flex-shrink:0;min-width:0;min-height:62px;width:100%;padding:9px 16px;border:0;border-top:3px solid #674731;background:#f6e8c9;color:#674731;text-align:left;box-shadow:inset 0 2px #fff8e7}.order-inbox-shortcut.has-reply{background:#e4edcf}.order-inbox-shortcut-icon{position:relative;display:grid;place-items:center;flex:0 0 35px;width:35px;height:35px;border:2px solid #674731;background:#fff6df}.order-inbox-shortcut-icon svg{width:20px;height:20px}.order-inbox-shortcut-count{position:absolute;top:-9px;right:-8px;display:grid;place-items:center;min-width:19px;height:19px;padding:1px 3px;border:2px solid #fff6df;background:#ad513f;color:#fff9e9;font:9px Silkscreen,monospace}.order-inbox-shortcut-copy{display:grid;gap:3px;flex:1;min-width:0}.order-inbox-shortcut-copy strong{font:11px/1.3 Silkscreen,monospace}.order-inbox-shortcut-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px/1.3 'Courier New',monospace}.order-inbox-shortcut-action{flex-shrink:0;font:9px/1.3 Silkscreen,monospace;text-align:right}.order-inbox-shortcut:focus-visible{outline:3px solid #617e4d;outline-offset:-5px}
+.order-chat-summary{display:block;flex-shrink:0;max-height:116px;overflow:auto}.order-chat-summary summary{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;list-style:none;line-height:1.5}.order-chat-summary summary::-webkit-details-marker{display:none}.order-chat-summary summary>span{min-width:0;overflow-wrap:anywhere}.order-chat-summary summary strong{font-family:Silkscreen,monospace;font-weight:400;font-size:10px}.order-chat-summary summary small{flex-shrink:0;color:#674731;font:9px Silkscreen,monospace}.order-chat-summary[open] summary{padding-bottom:8px;border-bottom:1px dashed #b69464}.order-chat-summary>div{display:flex;justify-content:space-between;gap:9px;padding-top:6px}.order-chat-summary>div span:first-child{min-width:0;overflow-wrap:anywhere}
+@media(max-width:360px){.order-inbox-shortcut{padding-inline:11px;gap:8px}.order-inbox-shortcut-action{font-size:8px}.order-inbox-shortcut-copy strong{font-size:10px}}
+.checkout-confirmation{width:min(420px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:0;border:4px solid #674731;border-radius:0;background:#fff3da;color:#493425;box-shadow:6px 6px 0 #34281b;overflow:auto}
+.checkout-confirmation::backdrop{background:#332719aa;backdrop-filter:blur(2px)}
+.checkout-confirmation-content{display:grid;gap:15px;margin:0;padding:22px}
+.checkout-confirmation h2{margin:0;color:#674731;font:16px/1.4 Silkscreen,monospace}
+.checkout-confirmation p{margin:0;font:13px/1.6 'Courier New',monospace}
+.checkout-confirmation-items{display:grid;gap:9px;max-height:30dvh;overflow-y:auto;padding:13px;border:2px solid #c7a576;background:#f5e8ce}
+.checkout-confirmation-items>div,.checkout-confirmation-total{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font:12px/1.5 'Courier New',monospace}
+.checkout-confirmation-items span{min-width:0;overflow-wrap:anywhere}.checkout-confirmation-items strong{white-space:nowrap}
+.checkout-confirmation-total{padding-top:13px;border-top:2px dashed #b69464;font:12px/1.5 Silkscreen,monospace}
+.checkout-confirmation-note{color:#80664d}
+.checkout-confirmation-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.checkout-confirmation .btn{min-width:0;min-height:45px;margin:0;padding:8px;border:2px solid #62412b;border-radius:0;background:#98704b;color:#fff4dd;box-shadow:2px 2px 0 #62412b;font:10px/1.4 Silkscreen,monospace;white-space:normal}
+.checkout-confirmation .btn.secondary{border-color:#a17b50;background:#eddbb8;color:#674731;box-shadow:2px 2px 0 #a17b50}
+.checkout-confirmation .btn:disabled{opacity:.6;cursor:default}.checkout-confirmation .btn:focus-visible{outline:3px solid #617e4d;outline-offset:2px}
+@media(max-width:360px){.checkout-confirmation-content{padding:16px}.checkout-confirmation-actions{grid-template-columns:1fr}}
 </style>
 
 <style scoped src="../assets/css/pixel-store.css"/>

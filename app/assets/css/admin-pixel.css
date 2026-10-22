@@ -99,3 +99,7 @@
   .order-filters button{font-size:9px;padding:7px}
   .queue-heading h2{font-size:15px}
 }
+.order-summary{grid-template-columns:repeat(5,minmax(0,1fr))}
+.pending-dot{background:#b98a4d;box-shadow:3px 3px 0 #e3c99e}
+@media(max-width:1199px){.order-summary{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:599px){.order-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}

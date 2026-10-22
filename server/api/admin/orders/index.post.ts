@@ -4,12 +4,11 @@ import { randomBytes } from 'node:crypto'
 import { db, type OrderRow, publicOrder } from '../../../utils/db'
 import { requireAdmin, verifyOrigin } from '../../../utils/auth'
 import { notifyOrderChanged } from '../../../utils/room'
+import {orderNameInput} from '../../../utils/order-name'
 export default defineEventHandler(async event => {
   requireAdmin(event); verifyOrigin(event)
   const body=await readJsonBody<Record<string,unknown>>(event)
-  if(body.name!==undefined&&typeof body.name!=='string')throw createError({statusCode:400,statusMessage:'Order name must be text'})
-  const name=typeof body.name==='string'?body.name.trim():''
-  if(name.length>60||/[\u0000-\u001f\u007f-\u009f]/u.test(name))throw createError({statusCode:400,statusMessage:'Enter a name of up to 60 characters on one line'})
+  const name=body.name===undefined?'':orderNameInput(body.name)
   // The token_hash column is kept only for backward compatibility with v0.1 databases.
   // It is not used for public entry and is never returned to clients.
   const legacyUnusedToken = randomBytes(32).toString('hex')

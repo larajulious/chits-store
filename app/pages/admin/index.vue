@@ -9,14 +9,19 @@ const storeOpen=ref(true),storeActionBusy=ref(false),closeStoreConfirmation=ref<
 const menuManager=ref<{open:()=>void;refresh:()=>Promise<void>}|null>(null)
 const resetManager=ref<{open:()=>void}|null>(null)
 const chatManager=ref<{refresh:()=>Promise<void>}|null>(null),feedbackManager=ref<{refresh:()=>Promise<void>}|null>(null)
-const orderFilter=ref<OrderStatus>('Preparing'),updatingId=ref<number|null>(null),refreshing=ref(false),lastRefreshed=ref(''),success=ref('')
+const privateInbox=ref<{refresh:()=>Promise<void>}|null>(null)
+let orderPoll:ReturnType<typeof setInterval>|undefined
+const orderFilter=ref<OrderStatus>('Pending'),updatingId=ref<number|null>(null),refreshing=ref(false),lastRefreshed=ref(''),success=ref('')
 const deliveryConfirmation=ref<HTMLDialogElement|null>(null),pendingDelivery=ref<Order|null>(null)
+const pendingConfirmationDialog=ref<HTMLDialogElement|null>(null),pendingOrder=ref<Order|null>(null),pendingName=ref(''),pendingOrderError=ref('')
 const createOrderDialog=ref<HTMLDialogElement|null>(null),orderName=ref(''),createOrderError=ref('')
+const pendingCount=computed(()=>orders.value.filter(o=>o.status==='Pending').length)
 const preparingCount=computed(()=>orders.value.filter(o=>o.status==='Preparing').length)
 const readyCount=computed(()=>orders.value.filter(o=>o.status==='Ready').length)
 const outForDeliveryCount=computed(()=>orders.value.filter(o=>o.status==='Served').length)
 const deliveredCount=computed(()=>orders.value.filter(o=>o.status==='Delivered').length)
 const filters=computed(()=>[
+  {value:'Pending' as const,label:'Pending',count:pendingCount.value},
   {value:'Preparing' as const,label:'Preparing',count:preparingCount.value},
   {value:'Ready' as const,label:'Ready',count:readyCount.value},
   {value:'Served' as const,label:orderStatusLabels.Served,count:outForDeliveryCount.value},
@@ -26,7 +31,9 @@ const visibleOrders=computed(()=>orders.value.filter(o=>o.status===orderFilter.v
 onMounted(async()=>{
   try{const r=await $fetch<{authenticated:boolean}>('/api/admin/session');loggedIn.value=r.authenticated;if(r.authenticated)await refresh()}
   catch{error.value='Could not reach the server'}finally{checking.value=false}
+  orderPoll=setInterval(()=>{if(loggedIn.value&&!document.hidden)void $fetch<Order[]>('/api/admin/orders').then(next=>{orders.value=next}).catch(()=>{})},5000)
 })
+onBeforeUnmount(()=>clearInterval(orderPoll))
 async function refresh(){const [nextOrders,nextRoom,nextStore]=await Promise.all([$fetch<Order[]>('/api/admin/orders'),$fetch<RoomState>('/api/admin/room'),$fetch<StoreStatus>('/api/store/status')]);orders.value=nextOrders;room.value=nextRoom;storeOpen.value=nextStore.open;lastRefreshed.value=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
 async function reload(){if(refreshing.value)return;refreshing.value=true;error.value='';try{await refresh()}catch(e:any){error.value=e?.data?.statusMessage||'Could not refresh the dashboard'}finally{refreshing.value=false}}
 async function login(){busy.value=true;error.value='';try{await $fetch('/api/admin/login',{method:'POST',body:{password:password.value}});password.value='';loggedIn.value=true;await refresh()}catch(e:any){error.value=e?.data?.statusMessage||'Login failed'}finally{busy.value=false}}
@@ -54,8 +61,21 @@ async function update(order:Order){
  if(updatingId.value!==null)return
  const next=orderNextStatus[order.status]
  if(!next)return
+ if(order.status==='Pending'){pendingOrder.value=order;pendingName.value=order.name||'';pendingOrderError.value='';pendingConfirmationDialog.value?.showModal();return}
  if(next==='Delivered'){error.value='';pendingDelivery.value=order;deliveryConfirmation.value?.showModal();return}
  await applyStatus(order,next)
+}
+async function updatePending(confirm:boolean){
+ const order=pendingOrder.value
+ if(!order||updatingId.value!==null)return
+ updatingId.value=order.id;pendingOrderError.value='';error.value='';success.value=''
+ try{
+   await $fetch(`/api/admin/orders/${order.id}`,{method:'PATCH',body:confirm?{status:'Preparing',name:pendingName.value}:{name:pendingName.value}})
+   await refresh();await privateInbox.value?.refresh()
+   pendingConfirmationDialog.value?.close()
+   success.value=confirm?`${order.number} confirmed and moved to Preparing.`:`${order.number} name saved.`
+ }catch(e:any){pendingOrderError.value=e?.data?.statusMessage||'Could not update this order.'}
+ finally{updatingId.value=null}
 }
 async function confirmDelivery(){
  if(!pendingDelivery.value||updatingId.value!==null)return
@@ -63,7 +83,7 @@ async function confirmDelivery(){
  if(!error.value)deliveryConfirmation.value?.close()
 }
 async function applyStatus(order:Order,next:OrderStatus){
- updatingId.value=order.id;error.value='';success.value='';try{await $fetch(`/api/admin/orders/${order.id}`,{method:'PATCH',body:{status:next}});await refresh();success.value=`${order.number} marked ${orderStatusLabels[next].toLowerCase()}.`}catch(e:any){error.value=e?.data?.statusMessage||'Could not update order'}finally{updatingId.value=null}
+ updatingId.value=order.id;error.value='';success.value='';try{await $fetch(`/api/admin/orders/${order.id}`,{method:'PATCH',body:{status:next}});await refresh();await privateInbox.value?.refresh();success.value=order.status==='Pending'?`${order.number} confirmed and moved to Preparing.`:`${order.number} marked ${orderStatusLabels[next].toLowerCase()}.`}catch(e:any){error.value=e?.data?.statusMessage||'Could not update order'}finally{updatingId.value=null}
 }
 async function moderate(action:string,id?:string,enabled?:boolean){
  try{room.value=await $fetch<RoomState>('/api/admin/room',{method:'POST',body:{action,id,enabled}})}catch(e:any){error.value=e?.data?.statusMessage||'Moderation failed'}
@@ -74,6 +94,7 @@ async function onDataReset(options:string[]){
     await refresh()
     if(options.includes('menu'))await menuManager.value?.refresh()
     if(options.includes('chat'))await chatManager.value?.refresh()
+    if(options.includes('chat')||options.includes('orders'))await privateInbox.value?.refresh()
     if(options.includes('feedback'))await feedbackManager.value?.refresh()
   }catch(e:any){error.value=e?.data?.statusMessage||'Data was reset, but the dashboard could not refresh'}
   if(!error.value)success.value=`Reset complete: ${options.map(option=>({menu:"today's menu",orders:'orders',feedback:'feedback',chat:'chat',visitors:'visitor sessions'}[option]||option)).join(', ')}.`
@@ -100,6 +121,7 @@ async function onDataReset(options:string[]){
         <AdminDailyMenu ref="menuManager" @session-expired="loggedIn=false"/>
         <AdminResetData ref="resetManager" @reset="onDataReset" @session-expired="loggedIn=false"/>
         <section class="order-summary" aria-label="Recent order counts">
+          <div class="summary-card"><span class="summary-dot pending-dot"/><div><span class="summary-label">Pending</span><strong>{{ pendingCount }}</strong></div><span class="summary-note">Needs confirmation</span></div>
           <div class="summary-card"><span class="summary-dot preparing-dot"/><div><span class="summary-label">Preparing</span><strong>{{ preparingCount }}</strong></div><span class="summary-note">In the kitchen</span></div>
           <div class="summary-card"><span class="summary-dot ready-dot"/><div><span class="summary-label">Ready</span><strong>{{ readyCount }}</strong></div><span class="summary-note">Ready for delivery</span></div>
           <div class="summary-card"><span class="summary-dot delivery-dot"/><div><span class="summary-label">{{ orderStatusLabels.Served }}</span><strong>{{ outForDeliveryCount }}</strong></div><span class="summary-note">On the way</span></div>
@@ -111,12 +133,13 @@ async function onDataReset(options:string[]){
               <header class="queue-heading"><div><h2 id="order-queue-heading">Order queue</h2><p>Counts and history show your most recent 100 orders.</p><span v-if="lastRefreshed" class="refresh-time">Updated {{ lastRefreshed }}</span></div><button type="button" class="btn queue-create-button" :disabled="busy" @click="openCreateOrder">+ Create order</button></header>
               <nav class="order-filters" aria-label="Filter orders"><button v-for="filter in filters" :key="filter.value" type="button" :aria-pressed="orderFilter===filter.value" :class="{selected:orderFilter===filter.value}" @click="orderFilter=filter.value">{{ filter.label }}<span>{{ filter.count }}</span></button></nav>
               <div class="order-table-scroll" tabindex="0" aria-label="Order queue records">
-                <table v-if="visibleOrders.length" class="order-table"><caption class="visually-hidden">{{ orderStatusLabels[orderFilter] }} orders, newest first</caption><thead><tr><th scope="col">Order</th><th scope="col">Created</th><th scope="col">Status</th><th scope="col">Next step</th></tr></thead><tbody><tr v-for="order in visibleOrders" :key="order.id"><th scope="row" class="order-number"><span>{{ order.number }}</span><small v-if="order.name" class="order-customer-name">{{ order.name }}</small></th><td class="order-created"><time :datetime="new Date(order.createdAt).toISOString()" :title="new Date(order.createdAt).toLocaleString()"><span>{{ new Date(order.createdAt).toLocaleDateString([],{month:'short',day:'numeric'}) }}</span><span>{{ new Date(order.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) }}</span></time></td><td><span class="pill" :class="{ready:order.status==='Ready',served:order.status==='Served'||order.status==='Delivered'}">{{ orderStatusLabels[order.status] }}</span></td><td class="order-next-step"><button v-if="order.status!=='Delivered'" type="button" class="btn small" :class="{green:order.status==='Preparing',secondary:order.status==='Ready'}" :aria-label="`Mark ${order.number} ${orderStatusLabels[orderNextStatus[order.status]!].toLowerCase()}`" :disabled="updatingId!==null" @click="update(order)">{{ updatingId===order.id?'Updating…':order.status==='Preparing'?'Mark ready':order.status==='Ready'?'Send out':'Mark delivered' }}</button><span v-else class="order-dispatched"><StoreGlyph name="check"/>Delivered</span></td></tr></tbody></table>
+                <table v-if="visibleOrders.length" class="order-table"><caption class="visually-hidden">{{ orderStatusLabels[orderFilter] }} orders, newest first</caption><thead><tr><th scope="col">Order</th><th scope="col">Created</th><th scope="col">Status</th><th scope="col">Next step</th></tr></thead><tbody><tr v-for="order in visibleOrders" :key="order.id"><th scope="row" class="order-number"><span>{{ order.number }}</span><small v-if="order.name" class="order-customer-name">{{ order.name }}</small></th><td class="order-created"><time :datetime="new Date(order.createdAt).toISOString()" :title="new Date(order.createdAt).toLocaleString()"><span>{{ new Date(order.createdAt).toLocaleDateString([],{month:'short',day:'numeric'}) }}</span><span>{{ new Date(order.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) }}</span></time></td><td><span class="pill" :class="{ready:order.status==='Ready',served:order.status==='Served'||order.status==='Delivered'}">{{ orderStatusLabels[order.status] }}</span></td><td class="order-next-step"><button v-if="order.status!=='Delivered'" type="button" class="btn small" :class="{green:order.status==='Pending'||order.status==='Preparing',secondary:order.status==='Ready'}" :aria-label="order.status==='Pending'?`Confirm order ${order.number}`:`Mark ${order.number} ${orderStatusLabels[orderNextStatus[order.status]!].toLowerCase()}`" :disabled="updatingId!==null" @click="update(order)">{{ updatingId===order.id?'Updating…':order.status==='Pending'?'Confirm order':order.status==='Preparing'?'Mark ready':order.status==='Ready'?'Send out':'Mark delivered' }}</button><span v-else class="order-dispatched"><StoreGlyph name="check"/>Delivered</span></td></tr></tbody></table>
                 <div v-else class="queue-empty"><StoreGlyph name="orders"/><strong>{{ orders.length===0?'Your order queue is ready.':`No ${orderStatusLabels[orderFilter].toLowerCase()} orders.` }}</strong><p>{{ orders.length===0?'Create an order above to get started.':'Choose another status to view its orders.' }}</p></div>
               </div>
             </section>
           </section>
           <aside class="conversation-column" aria-label="Customer conversation and moderation">
+            <AdminOrderInbox ref="privateInbox" :store-open="storeOpen" @order-updated="reload" @session-expired="loggedIn=false"/>
             <AdminChat ref="chatManager" class="workspace-chat" :store-open="storeOpen" @session-expired="loggedIn=false"/>
             <AdminFeedback ref="feedbackManager" @session-expired="loggedIn=false"/>
             <details class="card moderation-panel"><summary>Community Moderation<span>Manage visitors</span></summary><div class="moderation-content"><div class="moderation-toggle"><span>Public chat: <strong>{{ room.chatEnabled?'Enabled':'Disabled' }}</strong></span><button type="button" class="btn small secondary" @click="moderate('toggle_chat',undefined,!room.chatEnabled)">{{ room.chatEnabled?'Disable':'Enable' }}</button></div><button type="button" class="btn small secondary" :disabled="refreshing" @click="reload">Refresh visitors</button><p v-if="room.members.length===0" class="help-text">Nobody is online.</p><div v-for="visitor in room.members" :key="visitor.id" class="moderation-member"><strong>{{ visitor.nickname }}</strong><div><button type="button" class="btn small secondary" @click="moderate('mute',visitor.id)">{{ visitor.muted?'Unmute':'Mute' }}</button><button type="button" class="btn small secondary" @click="moderate('kick',visitor.id)">Kick</button></div></div><p class="privacy">Mute and kick controls are temporary and reset on restart.</p></div></details>
@@ -130,6 +153,16 @@ async function onDataReset(options:string[]){
             <input id="create-order-name" v-model="orderName" class="input" type="text" maxlength="60" autocomplete="off" placeholder="Customer name" autofocus :disabled="busy">
             <p v-if="createOrderError" class="error" role="alert">{{ createOrderError }}</p>
             <div class="delivery-confirmation-actions"><button type="button" class="btn secondary" :disabled="busy" @click="createOrderDialog?.close()">Cancel</button><button type="submit" class="btn" :disabled="busy">{{ busy?'Creating…':'Create order' }}</button></div>
+          </form>
+        </dialog>
+        <dialog ref="pendingConfirmationDialog" class="delivery-confirmation create-order-modal" aria-labelledby="pending-confirmation-heading" @close="pendingOrder=null;pendingName='';pendingOrderError=''" @cancel="updatingId!==null&&$event.preventDefault()">
+          <form @submit.prevent="updatePending(true)">
+            <h2 id="pending-confirmation-heading">Pending order #{{ pendingOrder?.number }}</h2>
+            <p>Add a name if helpful. It appears on the live order board after confirmation.</p>
+            <label for="pending-order-name" class="label">Order name <span>(optional)</span></label>
+            <input id="pending-order-name" v-model="pendingName" class="input" type="text" maxlength="60" autocomplete="off" placeholder="Customer name" :disabled="updatingId!==null">
+            <p v-if="pendingOrderError" class="error" role="alert">{{ pendingOrderError }}</p>
+            <div class="delivery-confirmation-actions"><button type="button" class="btn secondary" :disabled="updatingId!==null" @click="pendingConfirmationDialog?.close()">Cancel</button><button type="button" class="btn secondary" :disabled="updatingId!==null" @click="updatePending(false)">Save name</button><button type="submit" class="btn green" :disabled="updatingId!==null">{{ updatingId!==null?'Saving…':'Confirm order' }}</button></div>
           </form>
         </dialog>
         <dialog ref="closeStoreConfirmation" class="delivery-confirmation" aria-labelledby="close-store-heading" aria-describedby="close-store-description" @cancel="storeActionBusy&&$event.preventDefault()">

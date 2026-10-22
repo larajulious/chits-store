@@ -45,7 +45,7 @@ let socket:WebSocket|null=null, alive=true, reconnect:ReturnType<typeof setTimeo
 const preparing=computed(()=>board.value.filter(o=>o.status==='Preparing').length)
 const ready=computed(()=>board.value.filter(o=>o.status==='Ready').length)
 const headerTime=computed(()=>new Date().getHours()<12?'Good morning!':new Date().getHours()<18?'Good afternoon!':'Good evening!')
-const statusOptions:Status[]=['Preparing','Ready','Served','Delivered']
+const statusOptions:Status[]=['Preparing','Ready','Served']
 watch([overlay,chatTab],([value,tab])=>{if(value==='chat'&&tab==='community')unreadChat.value=0})
 onMounted(async()=>{
   document.addEventListener('visibilitychange',onVisibilityChanged)
@@ -319,7 +319,7 @@ async function leave(){
           <button type="button" class="btn small secondary dialog-action" :disabled="menuLoading" @click="loadMenu(true)">Refresh menu</button>
         </template>
         <template v-if="overlay==='board'">
-          <section class="order-status-group" v-for="status in statusOptions" :key="status" :aria-label="`${orderStatusLabels[status]} orders`"><div class="order-status-heading"><strong>{{ orderStatusLabels[status] }}</strong><span>{{ board.filter(o=>o.status===status).length }}</span></div><div class="order-chips"><span v-for="o in board.filter(b=>b.status===status)" :key="o.id" class="pill" :class="{ready:status==='Ready',served:status==='Served'||status==='Delivered'}"><strong>{{ o.number }}</strong><small v-if="o.name">{{ o.name }}</small></span><small v-if="!board.some(o=>o.status===status)" class="muted">No orders</small></div></section>
+          <section class="order-status-group" v-for="status in statusOptions" :key="status" :aria-label="`${orderStatusLabels[status]} orders`"><div class="order-status-heading"><strong>{{ orderStatusLabels[status] }}</strong><span>{{ board.filter(o=>o.status===status).length }}</span></div><div class="order-chips"><span v-for="o in board.filter(b=>b.status===status)" :key="o.id" class="pill" :class="{ready:status==='Ready',served:status==='Served'}"><strong>{{ o.number }}</strong><small v-if="o.name">{{ o.name }}</small></span><small v-if="!board.some(o=>o.status===status)" class="muted">No orders</small></div></section>
           <p class="privacy">Order numbers and names added by staff are visible to everyone here. For an order you placed, open Chat → Order inbox to message staff privately.</p>
           <button class="btn small secondary dialog-action" @click="loadBoard">Refresh board</button>
         </template>

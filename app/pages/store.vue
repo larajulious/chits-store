@@ -4,6 +4,7 @@ import { isAvatar } from '../../shared/avatars'
 import { reactionOptions } from '../../shared/reactions'
 import { orderStatusLabels,type OrderStatus } from '../../shared/order-status'
 import type { ChatMessage } from '../../shared/chat'
+import {playChatSound} from '../utils/chatSound'
 const route=useRoute()
 const featureConfig=useRuntimeConfig().public
 // Runtime flags can disable a feature for everyone; query switches isolate one browser for profiling.
@@ -21,7 +22,7 @@ const menuDate=computed(()=>menu.value.date===manilaDate()?new Date(`${menu.valu
 const hasCurrentMenu=computed(()=>Boolean(menu.value.version&&menu.value.date===manilaDate()))
 const visitorAvatar=computed(()=>isAvatar(me.value?.avatar)?me.value.avatar:'mochi')
 const online=computed(()=>players.value.length)
-const overlay=ref(''), message=ref(''), chat=ref<ChatMessage[]>([]), notice=ref(''), connected=ref(false), returningHome=ref(false), chatEnabled=ref(true)
+const overlay=ref(''), message=ref(''), chat=ref<ChatMessage[]>([]), unreadChat=ref(0), notice=ref(''), connected=ref(false), returningHome=ref(false), chatEnabled=ref(true)
 const musicPlaying=ref(false), musicMuted=ref(false)
 const musicPreferenceKey='chits-store-music-muted'
 let music:HTMLAudioElement|undefined, musicStarting=false, musicGestureListening=false
@@ -34,6 +35,7 @@ const preparing=computed(()=>board.value.filter(o=>o.status==='Preparing').lengt
 const ready=computed(()=>board.value.filter(o=>o.status==='Ready').length)
 const headerTime=computed(()=>new Date().getHours()<12?'Good morning!':new Date().getHours()<18?'Good afternoon!':'Good evening!')
 const statusOptions:Status[]=['Preparing','Ready','Served','Delivered']
+watch(overlay,value=>{if(value==='chat')unreadChat.value=0})
 onMounted(async()=>{
   document.addEventListener('visibilitychange',onVisibilityChanged)
   scheduleNextMenuDay()
@@ -125,6 +127,7 @@ function onMenuUpdated(version:unknown){
 }
 function onVisibilityChanged(){
   if(document.hidden){music?.pause();musicPlaying.value=false;hiddenAt=Date.now();return}
+  if(overlay.value==='chat')unreadChat.value=0
   if(!musicMuted.value){listenForMusicGesture();void startMusic()}
   if(menuStale||menu.value.date!==manilaDate()||(hiddenAt&&Date.now()-hiddenAt>5000)){
     menuStale=true;menuEpoch++;void loadMenu(true)
@@ -165,10 +168,14 @@ function connect(){
     if(data.type==='chat'){
       const entry:ChatMessage={messageId:data.messageId,id:data.id,nickname:data.nickname,text:data.text,at:data.at,role:data.role==='staff'?'staff':'visitor'}
       chat.value=[...chat.value.slice(-49),entry]
+      if(entry.id!==selfId.value){
+        if(overlay.value!=='chat'||document.hidden)unreadChat.value=Math.min(99,unreadChat.value+1)
+        if(!document.hidden)playChatSound()
+      }
       if(entry.role==='staff')game.value?.showStaffBubble(entry.text)
       else game.value?.showBubble(entry.id,entry.text)
     }
-    if(data.type==='chat_reset')chat.value=[]
+    if(data.type==='chat_reset'){chat.value=[];unreadChat.value=0}
     if(data.type==='emote')game.value?.showBubble(data.id,data.emoji)
     if(data.type==='feedback_changed')void feedbackBox.value?.refresh()
     if(data.type==='menu:updated'||data.type==='menu_changed')onMenuUpdated(data.version)
@@ -215,7 +222,7 @@ async function leave(){
       <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact" @cat-hint="notice='Walk closer to Miming to pet the cat.'"/></ClientOnly>
     </div>
     <nav class="structured-actions" aria-label="Store actions">
-      <button type="button" @click="overlay='chat'"><StoreGlyph name="chat"/><span>Chat</span></button>
+      <button type="button" class="store-chat-action" aria-label="Chat" :aria-describedby="unreadChat?'store-chat-unread':undefined" @click="overlay='chat'"><StoreGlyph name="chat"/><span>Chat</span><span v-if="unreadChat" class="chat-unread-badge" aria-hidden="true">{{ unreadChat>9?'9+':unreadChat }}</span><span id="store-chat-unread" class="chat-sr-only">{{ unreadChat }} unread {{ unreadChat===1?'message':'messages' }}</span></button>
       <button type="button" @click="interact('menu')"><StoreGlyph name="menu"/><span>Menu</span></button>
       <button type="button" @click="overlay='board'"><StoreGlyph name="orders"/><span>Orders</span></button>
       <button type="button" @click="overlay='emotes'"><StoreGlyph name="smile"/><span>Emotes</span></button>

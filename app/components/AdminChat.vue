@@ -1,15 +1,27 @@
 <script setup lang="ts">
 import type {AdminChatState,ChatMessage} from '../../shared/chat'
+import {playChatSound} from '../utils/chatSound'
 const props=defineProps<{storeOpen:boolean}>()
 const emit=defineEmits<{'session-expired':[]}>()
-const messages=ref<ChatMessage[]>([]),draft=ref(''),connected=ref(false),chatEnabled=ref(true),online=ref(0),sending=ref(false),error=ref('')
-const feed=ref<HTMLElement|null>(null)
-let alive=true,polling=false,requestSequence=0,timer:ReturnType<typeof setInterval>|undefined
+const messages=ref<ChatMessage[]>([]),draft=ref(''),connected=ref(false),chatEnabled=ref(true),online=ref(0),sending=ref(false),error=ref(''),unread=ref(0)
+const feed=ref<HTMLElement|null>(null),root=ref<HTMLElement|null>(null)
+let alive=true,polling=false,requestSequence=0,initialized=false,timer:ReturnType<typeof setInterval>|undefined
+function clearUnread(){unread.value=0}
+function readChat(){clearUnread();if(feed.value){feed.value.scrollTop=feed.value.scrollHeight;feed.value.focus()}}
+function chatFocused(){return document.visibilityState==='visible'&&!!document.activeElement&&!!root.value?.contains(document.activeElement)}
 async function apply(state:AdminChatState,scrollToBottom=false){
   const el=feed.value
   const nearBottom=!el||el.scrollHeight-el.scrollTop-el.clientHeight<48
   const changed=messages.value.at(-1)?.messageId!==state.messages.at(-1)?.messageId
+  const previous=new Set(messages.value.map(message=>message.messageId))
+  const incoming=initialized?state.messages.filter(message=>message.role==='visitor'&&!previous.has(message.messageId)):[]
+  initialized=true
   messages.value=state.messages;chatEnabled.value=state.chatEnabled;online.value=state.online;connected.value=true
+  if(!state.messages.length)clearUnread()
+  else if(incoming.length){
+    if(!document.hidden)playChatSound()
+    if(!chatFocused())unread.value=Math.min(99,unread.value+incoming.length)
+  }
   if(scrollToBottom||(changed&&nearBottom)){
     await nextTick()
     if(alive&&feed.value)feed.value.scrollTop=feed.value.scrollHeight
@@ -42,10 +54,10 @@ onBeforeUnmount(()=>{alive=false;clearInterval(timer)})
 defineExpose({refresh:()=>load(true)})
 </script>
 <template>
-  <section class="card stack admin-chat" aria-labelledby="admin-chat-title">
-    <header class="admin-chat-header"><h2 id="admin-chat-title" class="section-head"><StoreGlyph name="chat"/>Customer chat</h2><span class="pill" :class="{ready:connected}">{{ connected?`${online} online`:'Connecting…' }}</span></header>
+  <section ref="root" class="card stack admin-chat" aria-labelledby="admin-chat-title" @pointerdown="clearUnread" @focusin="clearUnread">
+    <header class="admin-chat-header"><h2 id="admin-chat-title" class="section-head"><button type="button" class="admin-chat-icon-button" :aria-label="unread?`Read ${unread} unread customer ${unread===1?'message':'messages'}`:'Focus customer chat'" @click="readChat"><StoreGlyph name="chat"/><span v-if="unread" class="admin-chat-unread-badge" aria-hidden="true">{{ unread>9?'9+':unread }}</span></button>Customer chat</h2><span class="pill" :class="{ready:connected}">{{ connected?`${online} online`:'Connecting…' }}</span></header>
     <p class="help-text chat-explanation">Reply as staff to everyone in the store.</p>
-    <div ref="feed" class="admin-chat-feed" role="log" aria-label="Community chat messages" aria-live="polite" aria-relevant="additions text">
+    <div ref="feed" class="admin-chat-feed" role="log" tabindex="0" aria-label="Community chat messages" aria-live="polite" aria-relevant="additions text">
       <p v-if="messages.length===0" class="help-text">No messages yet. Say hello to your visitors.</p>
       <div v-for="entry in messages" :key="entry.messageId" class="admin-chat-line" :class="{'from-staff':entry.role==='staff'}"><div class="chat-sender"><strong>{{ entry.nickname }}</strong><span v-if="entry.role==='staff'" class="staff-tag">STAFF</span><time :datetime="new Date(entry.at).toISOString()">{{ new Date(entry.at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) }}</time></div><p>{{ entry.text }}</p></div>
     </div>
@@ -63,7 +75,8 @@ defineExpose({refresh:()=>load(true)})
 .admin-chat-form{display:grid;gap:8px;min-width:0}.admin-chat-form>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:stretch}.admin-chat-form .input{min-width:0;font-size:13px}.admin-chat-form .btn{min-width:66px;min-height:44px}.admin-chat .privacy,.admin-chat .error{margin:0}
 @media(max-width:420px){.admin-chat-header h2{font-size:15px}.admin-chat-header .pill{font-size:10px}.admin-chat-feed{padding:8px}.chat-sender{font-size:11px}}
 .admin-chat{font-family:'Courier New',monospace;color:#493425}
-.admin-chat-header h2{font:15px/1.5 Silkscreen,monospace;color:#674731}
+.admin-chat-header h2{font:15px/1.5 Silkscreen,monospace;color:#674731;gap:11px}
+.admin-chat-icon-button{position:relative;display:grid;place-items:center;flex-shrink:0;width:30px;height:26px;padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.admin-chat-icon-button svg{width:20px;height:20px}.admin-chat-unread-badge{position:absolute;top:-7px;right:-4px;display:grid;place-items:center;min-width:18px;height:18px;padding:0 2px;border:2px solid #fff3da;background:#ad513f;color:#fff8df;box-shadow:2px 2px 0 #674731;font:8px/1 Silkscreen,monospace;pointer-events:none}
 .admin-chat-header .pill{border:1px solid #91aa6f;border-radius:0;background:#d3e3b1;color:#3e5939;font:9px/1.5 Silkscreen,monospace}
 .chat-explanation,.admin-chat .privacy{color:#7f684f}
 .admin-chat-feed{border:2px solid #c5a678;border-radius:0;background:#f2e4c9;box-shadow:inset 2px 2px 0 #e3cfaa}
@@ -75,5 +88,5 @@ defineExpose({refresh:()=>load(true)})
 .admin-chat-form .help-text{color:#755b44}
 .admin-chat .btn{border:2px solid #62412b;border-radius:0;background:#98704b;color:#fff4dd;box-shadow:3px 3px 0 #62412b,inset 2px 2px 0 #b89067;font:10px/1.5 Silkscreen,monospace;transition:none}
 .admin-chat .btn:disabled{opacity:1;border-color:#baa68a;background:#e3d4bc;color:#94816a;box-shadow:2px 2px 0 #baa68a}
-.admin-chat .btn:focus-visible,.admin-chat .input:focus-visible{outline:3px solid #617e4d;outline-offset:4px}
+.admin-chat .btn:focus-visible,.admin-chat .input:focus-visible,.admin-chat-icon-button:focus-visible,.admin-chat-feed:focus-visible{outline:3px solid #617e4d;outline-offset:4px}
 </style>

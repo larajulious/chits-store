@@ -1,24 +1,44 @@
-/* Scoped to the public store. Integer edges, local lettering, no image filters. */
-.game-shell{--pixel-ink:#674731;--pixel-paper:#fff3da;--pixel-shadow:#b68c61;font-family:'Courier New',monospace;color:#493425;border-radius:0}
-.structured-store{border:3px solid var(--pixel-ink);border-radius:0;background:var(--pixel-paper);box-shadow:6px 6px 0 #bd9c76}
-.structured-store-top{background:#fff3da;border-bottom:3px solid var(--pixel-ink)}
-.visitor-identity strong,.structured-actions,.store-dialog .btn,.store-dialog .section-head,.order-status-heading,.visit-status .pill,.bakery-status-strip{font-family:Silkscreen,monospace;font-weight:400}
-.visitor-identity strong{font-size:12px;letter-spacing:0}.visitor-identity div>span{font-size:12px;color:#755b44}
-.visitor-portrait{border:2px solid #987047;border-radius:0;background:#ecd8b1;box-shadow:2px 2px 0 #d0af7c}
+/* Scoped to the public store. Chrome follows the approved pixel-art reference: cream panels, brown pixel borders. */
+.game-shell{--ink:#4a3121;--frame:#6e4a31;--paper:#fcf4e4;--button:#fbf1de;--edge:#b08a5e;--lift:#c9a678;--muted:#8f7357;font-family:'Courier New',monospace;color:#493425}
+.structured-store{width:min(100%,480px);height:calc(100dvh - 32px);min-height:640px;max-height:980px;margin:16px auto;overflow:hidden;border:3px solid var(--frame);border-radius:18px;background:var(--paper);box-shadow:0 6px 0 var(--lift)}
+.structured-store-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0;padding:12px 14px;background:var(--paper);border-bottom:3px solid var(--frame)}
+/* Left: who you are. Right: two matching chips (connection + online count, then music). */
+.visitor-identity{display:flex;align-items:center;gap:12px;flex:1;min-width:0}
+.visitor-portrait{display:grid;place-items:center;flex-shrink:0;width:50px;height:50px;border:2px solid #8a6446;border-radius:6px;background:#f3dfbd;box-shadow:inset 0 -3px 0 #e2c89c,0 3px 0 var(--lift)}
+.visitor-copy{display:grid;gap:6px;min-width:0}
+.visitor-copy>span{font:10px/1 Silkscreen,monospace;letter-spacing:.06em;color:var(--muted)}
+.visitor-copy>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:700 15px/1.2 'Courier New',monospace;color:var(--ink)}
+.visit-status{display:grid;grid-auto-rows:30px;gap:7px;flex-shrink:0;width:112px}
+.connection-pill,.music-toggle{display:flex;align-items:center;gap:6px;min-width:0;height:100%;padding:0 8px;border:2px solid;border-radius:6px;font:9px/1 Silkscreen,monospace;text-transform:uppercase;white-space:nowrap}
+.connection-pill{border-color:#b5d4a0;background:#e6f2da;color:#3d7a34}
+.connection-pill:not(.ready){border-color:#dcc196;background:#f6e9cf;color:var(--muted)}
+.connection-dot{flex-shrink:0;width:8px;height:8px;border-radius:50%;background:#3fa34d}.connection-pill:not(.ready) .connection-dot{background:#c9a678}
+.music-toggle{border-color:#b5d4a0;background:#e6f2da;color:#3d7a34;box-shadow:0 2px 0 #b5d4a0;cursor:pointer}
+.music-toggle[aria-pressed="false"]{border-color:#d4b68a;background:#f6e9cf;color:#7a5a3c;box-shadow:0 2px 0 #d4b68a}.music-toggle svg{flex-shrink:0;width:14px;height:14px;margin-left:-3px}
+.music-toggle:active:not(:disabled){transform:translateY(2px);box-shadow:none}
+/* The canvas is pinned to the top of the stage; any spare height continues the dark wooden frame. */
+.structured-store .game-stage{flex:1;min-height:0;background:var(--frame)}.structured-store .game-stage :deep(canvas){touch-action:none}
+.game-stage .structured-notice{position:absolute;top:10px;left:12px;right:12px;z-index:6;display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;padding:8px 10px;border:2px solid #8a9d67;border-radius:6px;background:#e7f3d4;box-shadow:0 3px 0 #67473155}
+.structured-notice strong{min-width:0;font:700 11px/1.4 'Courier New',monospace;color:#577149;overflow-wrap:anywhere}
+.structured-notice button{display:grid;place-items:center;flex-shrink:0;width:32px;height:32px;padding:0;border:0;background:transparent;box-shadow:none;color:#577149;font-size:19px;line-height:1}
+.structured-actions{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;flex-shrink:0;padding:12px 12px 10px;background:var(--paper);border-top:3px solid var(--frame)}
+.structured-actions button{position:relative;min-width:0;min-height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:6px 2px;border:2px solid var(--edge);border-radius:6px;background:var(--button);color:var(--ink);font:9px/1 Silkscreen,monospace;text-transform:uppercase;box-shadow:0 3px 0 var(--lift),inset 0 2px 0 #fffaf0}
+.structured-actions button:hover{background:#f6e6c8;border-color:#8a6446}
+.structured-actions button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--lift),inset 0 2px 0 #fffaf0}
+.structured-actions svg{width:24px;height:24px}
+.chat-unread-badge{position:absolute;top:-9px;right:-7px;display:grid;place-items:center;min-width:20px;height:20px;padding:0 3px;border:2px solid #fff3da;border-radius:4px;background:#ad513f;color:#fff8df;box-shadow:0 2px 0 #674731;font:9px/1 Silkscreen,monospace;pointer-events:none}.chat-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.structured-hint{display:flex;align-items:stretch;justify-content:center;gap:8px;flex-shrink:0;padding:4px 12px 12px;background:var(--paper)}
+.cat-hint-faces{display:flex;gap:2px;flex-shrink:0}
+.cat-hint-copy{display:flex;align-items:center;gap:8px;flex:1 1 auto;min-width:0;margin:0;padding:5px 10px;border:2px solid #e6d3b3;border-radius:6px;background:var(--button);color:#6b5038;font:12px/1.25 'Courier New',monospace}
+.cat-action{--shade:#a99be3;display:inline-flex;align-items:center;justify-content:center;gap:6px;flex-shrink:0;min-height:42px;padding:4px 10px;border:2px solid;border-radius:6px;font:10px/1.1 Silkscreen,monospace;text-transform:uppercase;box-shadow:0 3px 0 var(--shade)}
+.cat-action svg{width:18px;height:18px}
+.toss-yarn{--shade:#e3a8d2;border-color:#da94c6;background:#fae0f1;color:#a3478a}
+.cat-action:active:not(:disabled){transform:translateY(2px);box-shadow:0 1px 0 var(--shade)}.cat-action:disabled{opacity:.5;cursor:default}
+/* Touch fallback for movement; tapping the floor also walks. Hidden for mouse users, as in the reference. */
+.game-shell :deep(.game-joystick){display:none;left:8px;bottom:8px;width:68px;height:68px;border:3px solid #805a3e;background:#f9e7bb66;box-shadow:0 3px 0 #67473144;opacity:.6}.game-shell :deep(.joystick-knob){width:28px;height:28px;border-width:3px}
+@media(pointer:coarse){.game-shell :deep(.game-joystick){display:grid}}
 .game-shell .pill{border-radius:0;background:#e9d0a7;color:#62452d;border:1px solid #b08a5e}
 .game-shell .pill.ready{background:#d3e3b1;color:#3e5939;border-color:#91aa6f}.game-shell .pill.served{background:#e4dac7;color:#746450;border-color:#c0ad90}
-.visit-status .pill{font-size:9px;padding:4px 6px}.visitor-count{font-size:11px;color:#756047}.visitor-count svg{width:16px;height:16px}
-.bakery-status-strip{background:#e9d6af;border-block:0 solid var(--pixel-ink);border-bottom-width:3px;flex-wrap:wrap;row-gap:6px}
-.bakery-status-strip>span{font-size:9px;letter-spacing:0;color:#715236}.bakery-status-strip>div{font-family:'Courier New',monospace;font-size:11px;font-weight:700;color:#715236}
-.structured-actions{background:#f5e5c5;border-top:3px solid var(--pixel-ink);gap:10px;padding:12px 16px}
-.structured-actions button,.structured-actions a{border:2px solid #987047;border-radius:0;background:#f4dfb6;color:#715034;box-shadow:3px 3px 0 #b58b5e,inset 2px 2px 0 #fff4d9;font-size:10px;font-weight:400;transition:none}
-.structured-actions button:hover,.structured-actions a:hover{background:#ead19e;border-color:#674731;color:#493425}
-.structured-actions button:active,.structured-actions a:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #b58b5e}
-.structured-actions svg{width:24px;height:24px}
-.structured-actions .store-chat-action{position:relative}.chat-unread-badge{position:absolute;top:-9px;right:-7px;display:grid;place-items:center;min-width:20px;height:20px;padding:0 3px;border:2px solid #fff3da;background:#ad513f;color:#fff8df;box-shadow:2px 2px 0 #674731;font:9px/1 Silkscreen,monospace;pointer-events:none}.chat-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-.structured-store .structured-hint{background:#f5e5c5!important;color:#7d654c;font-size:10px}
-.structured-notice{border-bottom:2px solid #8a9d67}.structured-notice strong{font-family:'Courier New',monospace}
-.structured-notice button,.game-shell>.card{border-radius:0}
 .game-shell .overlay-shade{background:#34281bb3;backdrop-filter:none;padding:18px}
 .game-shell .store-dialog{border:0;border-radius:0;background:#fff3da;box-shadow:4px 0 #674731,-4px 0 #674731,0 -4px #674731,0 4px #674731,4px 8px #34281b,inset 0 0 0 2px #e3c597;padding:18px;gap:14px;scrollbar-width:thin;scrollbar-color:#a78053 #ecdabb}
 .game-shell .dialog-header{border-bottom:2px solid #d4b68a;padding-bottom:14px;grid-template-columns:minmax(0,1fr) 36px}
@@ -45,6 +65,8 @@
 .order-status-heading{font-size:11px;color:#674731}.order-status-heading>span{border:1px solid #b08a5e;border-radius:0;background:#e3cca3;font-family:'Courier New',monospace}
 .game-shell .order-chips .pill{display:inline-flex;flex-direction:column;align-items:flex-start;gap:2px;font-family:'Courier New',monospace;font-size:12px;border-radius:0;padding:6px 8px}.game-shell .order-chips .pill strong{font-weight:800}.game-shell .order-chips .pill small{font-size:11px;line-height:1.35}
 .game-shell .store-dialog .reaction-choice{font-size:9px;border-radius:0;min-height:88px;gap:12px}.reaction-symbol{width:32px;height:32px;image-rendering:pixelated;flex-shrink:0}
-.game-shell :deep(.game-joystick){border-radius:0;border:3px solid #805a3e;background:#f9e7bba8;box-shadow:3px 3px 0 #67473166}.game-shell :deep(.joystick-knob){border-radius:0;border-width:3px}
 .game-shell button:focus-visible,.game-shell a:focus-visible,.game-shell input:focus-visible{outline:3px solid #617e4d;outline-offset:4px}
-@media(max-width:599px){.structured-store{border:0;box-shadow:none}.game-shell .overlay-shade{padding:16px}.game-shell .store-dialog{padding:16px;gap:12px}.game-shell .dialog-header .section-head{font-size:13px}.structured-actions{padding-inline:14px}.structured-actions button,.structured-actions a{font-size:9px}.bakery-status-strip>div{gap:8px}.game-shell .store-dialog .reaction-choice{font-size:8px}}
+@media(min-width:600px){.structured-store{width:clamp(380px,calc((100dvh - 32px - 214px) * .6207 + 6px),480px)}}
+@media(max-width:599px){.structured-store{width:100%;height:100dvh;min-height:520px;max-height:none;margin:0;border:0;border-radius:0;box-shadow:none}.structured-store-top{padding:10px 12px}.visitor-portrait{width:46px;height:46px}.visitor-copy>strong{font-size:14px}.structured-actions{gap:6px;padding:10px 10px 8px}.structured-actions button{min-height:56px;font-size:8px}.structured-hint{gap:6px;padding:2px 10px 10px}.cat-hint-copy{padding:4px 8px;font-size:11px}.cat-action{padding:4px 8px;font-size:9px}.game-shell .overlay-shade{padding:16px}.game-shell .store-dialog{padding:16px;gap:12px}.game-shell .dialog-header .section-head{font-size:13px}.game-shell .store-dialog .reaction-choice{font-size:8px}}
+@media(max-width:380px){.structured-store-top{gap:10px}.visitor-identity{gap:10px}.visit-status{width:104px}.visitor-copy>strong{font-size:13px}.cat-hint-faces{display:none}.cat-action svg{display:none}}
+@media(max-width:340px){.structured-actions{grid-template-columns:repeat(3,minmax(0,1fr))}.structured-actions button{min-height:46px;flex-direction:row;gap:5px}.structured-actions svg{width:18px;height:18px}}

@@ -12,7 +12,7 @@ export const avatarOptions = [
   {id:'suman',label:'Suman',body:0x89a665,detail:0x4f754c},
   {id:'sapin-sapin',label:'Sapin-sapin',body:0xb28ac5,detail:0xe6bd62},
   {id:'bibingka',label:'Bibingka',body:0xe4b95b,detail:0x79945b},
-  {id:'pichi-pichi',label:'Pichi-pichi',body:0xf5e6ad,detail:0xfff9e8},
+  {id:'pichi-pichi',label:'Pichi-pichi',body:0xf2b84b,detail:0xfff9e8},
 ] as const
 
 export type AvatarId = typeof avatarOptions[number]['id']

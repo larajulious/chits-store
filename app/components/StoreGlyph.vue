@@ -1,7 +1,9 @@
 <script setup lang="ts">
-type Glyph='chat'|'orders'|'menu'|'smile'|'door'|'arrow'|'check'|'people'|'feedback'
+type PathGlyph='chat'|'orders'|'menu'|'smile'|'door'|'arrow'|'check'|'people'|'feedback'
+type GridGlyph=keyof typeof grids
+type Glyph=PathGlyph|GridGlyph
 const props=defineProps<{name:Glyph}>()
-const paths:Record<Glyph,string>={
+const paths:Record<PathGlyph,string>={
   feedback:'M3 1h10v2h2v12H1V3h2V1Zm1 2v2h8V3H4Zm-1 4v6h10V7H3Zm2 1h6v1H5V8Zm1 3h4v1H6v-1Z',
   chat:'M2 2h12v9H7v2H5v2H3v-4H2V2Zm2 2v5h1v2h1V9h6V4H4Zm1 1h6v1H5V5Zm0 2h4v1H5V7Z',
   orders:'M5 1h6v2h3v12H2V3h3V1Zm1 1v2h4V2H6ZM4 5v8h8V5h-1v1H5V5H4Zm1 2h6v1H5V7Zm0 3h5v1H5v-1Z',
@@ -12,5 +14,103 @@ const paths:Record<Glyph,string>={
   check:'M12 3h2v3h-2v2h-2v2H8v2H5v-2H3V8H1V5h2v2h2v2h2V7h2V5h3V3Z',
   people:'M4 1h4v1h1v4H8v1H4V6H3V2h1V1Zm1 2v2h2V3H5Zm6 0h3v1h1v3h-1v1h-3V6h2V5h-2V3ZM3 9h6v1h2v5H9v-4H3v4H1v-5h2V9Zm9 0h2v1h1v5h-2v-4h-1V9Z',
 }
+// 16x16 pixel drawings; each run of # becomes one rect.
+const grids={
+  book:[
+    '................',
+    '................',
+    '.######..######.',
+    '#......##......#',
+    '#.####.##.####.#',
+    '#......##......#',
+    '#.####.##.####.#',
+    '#......##......#',
+    '#.###..##..###.#',
+    '#......##......#',
+    '#.####.##.####.#',
+    '#......##......#',
+    '#######..#######',
+    '.......##.......',
+    '................',
+    '................',
+  ],
+  cat:[
+    '................',
+    '.#............#.',
+    '.##..........##.',
+    '.#.#........#.#.',
+    '.#..########..#.',
+    '#..............#',
+    '#..............#',
+    '#...##....##...#',
+    '#...##....##...#',
+    '#..............#',
+    '#......##......#',
+    '#.....#..#.....#',
+    '.#............#.',
+    '..############..',
+    '................',
+    '................',
+  ],
+  pencil:[
+    '..............##',
+    '.............###',
+    '............###.',
+    '##########.###..',
+    '#.........###...',
+    '#........###....',
+    '#.......###.....',
+    '#.####.###.#....',
+    '#.....###..#....',
+    '#....###...#....',
+    '#....#.....#....',
+    '#...#......#....',
+    '#..........#....',
+    '#.####.....#....',
+    '#..........#....',
+    '############....',
+  ],
+  note:[
+    '................',
+    '......#########.',
+    '......#########.',
+    '......##.....##.',
+    '......##.....##.',
+    '......##.....##.',
+    '......##.....##.',
+    '......##.....##.',
+    '......##.....##.',
+    '......##.######.',
+    '..######.#####..',
+    '..#####..#####..',
+    '..#####..#####..',
+    '..#####.........',
+    '................',
+    '................',
+  ],
+  yarn:[
+    '................',
+    '......####......',
+    '....########....',
+    '...######.###...',
+    '..##.#####.###..',
+    '..###.#####.##..',
+    '..####.#####.#..',
+    '.##############.',
+    '..#.##########..',
+    '..##.#########..',
+    '..###.###.####..',
+    '...###.###.##...',
+    '....########....',
+    '......####......',
+    '.#####..........',
+    '#...............',
+  ],
+}
+const runs=computed(()=>{
+  const rows=(grids as Record<string,string[]>)[props.name]
+  if(!rows)return []
+  return rows.flatMap((row,y)=>[...row.matchAll(/#+/g)].map(match=>({x:match.index!,y,width:match[0].length})))
+})
 </script>
-<template><svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" fill-rule="evenodd" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path :d="paths[props.name]"/></svg></template>
+<template><svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" fill-rule="evenodd" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path v-if="props.name in paths" :d="paths[props.name as PathGlyph]"/><rect v-for="run in runs" v-else :key="`${run.x}-${run.y}`" :x="run.x" :y="run.y" :width="run.width" height="1"/></svg></template>

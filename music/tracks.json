@@ -1,0 +1,31 @@
+{
+  "tracks": [
+    {
+      "id": "cozy-afternoon",
+      "title": "Cozy Afternoon",
+      "mood": "Warm and mellow",
+      "artist": "Chits Store",
+      "file": "Chits_Store_Cozy_Afternoon.mp3",
+      "durationSec": 60.05,
+      "license": "Supplied by the store owner. Confirm you hold the rights before public launch."
+    },
+    {
+      "id": "happy-meryenda",
+      "title": "Happy Meryenda",
+      "mood": "Bright and cheerful",
+      "artist": "Chits Store",
+      "file": "Chits_Store_Happy_Meryenda.mp3",
+      "durationSec": 60.05,
+      "license": "Supplied by the store owner. Confirm you hold the rights before public launch."
+    },
+    {
+      "id": "cozy-cafe-loop",
+      "title": "Cozy Café Loop",
+      "mood": "Soft café background",
+      "artist": "Chits Store",
+      "file": "chits-store-cozy-cafe-loop.mp3",
+      "durationSec": 40.05,
+      "license": "Existing store background loop. Confirm you hold the rights before public launch."
+    }
+  ]
+}

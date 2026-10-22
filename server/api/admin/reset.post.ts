@@ -4,6 +4,7 @@ import { readJsonBody } from '../../utils/body'
 import { db } from '../../utils/db'
 import { menuToday, todayInManila } from '../../utils/menu'
 import { broadcast, clearChatHistory, publishMenuUpdated, resetVisitorRoom } from '../../utils/room'
+import { clearJukeboxVotes } from '../../utils/jukebox'
 
 const resetOptions=['menu','orders','feedback','chat','visitors'] as const
 type ResetOption=typeof resetOptions[number]
@@ -37,7 +38,7 @@ export default defineEventHandler(async event=>{
     if(selected.has('visitors'))connection.prepare('DELETE FROM visitors').run()
   }).immediate()
 
-  if(selected.has('visitors'))resetVisitorRoom()
+  if(selected.has('visitors')){resetVisitorRoom();clearJukeboxVotes()}
   if(selected.has('chat'))clearChatHistory()
   if(selected.has('menu'))publishMenuUpdated(menuToday())
   if(selected.has('orders'))broadcast({type:'order_changed'})

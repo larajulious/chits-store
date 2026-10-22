@@ -14,7 +14,7 @@ import WebSocket from 'ws'
 const root=new URL('..',import.meta.url)
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms))
 
-test('each scene owns its cat and yarn, with local pet and toss state',async t=>{
+async function loadMascot(t){
   const dir=await mkdtemp(join(tmpdir(),'chits-local-cat-'))
   t.after(()=>rm(dir,{recursive:true,force:true}))
   const shared=await readFile(new URL('../shared/store-mascot.ts',import.meta.url),'utf8')
@@ -22,12 +22,22 @@ test('each scene owns its cat and yarn, with local pet and toss state',async t=>
   const compile=source=>ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText
   await writeFile(join(dir,'store-mascot.mjs'),compile(shared))
   await writeFile(join(dir,'localMascot.mjs'),compile(local))
-  const {createLocalMascot}=await import(pathToFileURL(join(dir,'localMascot.mjs')).href)
+  return import(pathToFileURL(join(dir,'localMascot.mjs')).href)
+}
+const allMoods=['walking','sitting','resting','sleeping','stretching','noticing_yarn','approaching_yarn','playing_with_yarn','returning_to_idle','idle','visiting','snuggling']
+
+test('each scene owns its cats and yarn, with local pet and toss state',async t=>{
+  const {createLocalMascot}=await loadMascot(t)
   const a=createLocalMascot(),b=createLocalMascot()
   assert.deepEqual(a.snapshot(0),b.snapshot(0))
-  assert.equal(a.pet({x:100,y:290},0),'petted')
-  assert.equal(a.snapshot(0).cat.purring,true)
-  assert.equal(b.snapshot(0).cat.purring,false)
+  assert.deepEqual(a.snapshot(0).cats.map(cat=>cat.name),['Miming','Onay'])
+  assert.equal(a.pet({x:232,y:466},0),'petted')
+  assert.equal(a.snapshot(0).cats[0].purring,true,'the nearest cat is petted')
+  assert.equal(a.snapshot(0).cats[1].purring,false)
+  assert.equal(b.snapshot(0).cats[0].purring,false)
+  assert.equal(a.pet({x:100,y:300},0,'Onay'),'too_far')
+  assert.equal(a.pet({x:250,y:500},0,'Onay'),'petted')
+  assert.equal(a.snapshot(0).cats[1].purring,true)
   assert.equal(a.toss(0),true)
   assert.equal(a.toss(100),false)
   assert.equal(b.snapshot(0).yarn.moving,false)
@@ -41,8 +51,43 @@ test('each scene owns its cat and yarn, with local pet and toss state',async t=>
   assert.equal(b.snapshot(120).yarn.x,210)
   assert.equal(a.snapshot(120).yarn.x!==210,true)
   for(let time=32;time<24_000;time+=16)a.tick(time,16)
-  assert.ok(['walking','sitting','resting','sleeping','stretching','noticing_yarn','approaching_yarn','playing_with_yarn','returning_to_idle'].includes(a.snapshot(24_000).cat.mood))
-  assert.equal(b.snapshot(24_000).cat.x,100)
+  for(const cat of a.snapshot(24_000).cats)assert.ok(allMoods.includes(cat.mood),cat.mood)
+  assert.equal(b.snapshot(24_000).cats[0].x,232)
+})
+
+test('Onay stays by the feedback board; Miming visits and they snuggle side by side',async t=>{
+  const {createLocalMascot}=await loadMascot(t)
+  const random=Math.random
+  t.after(()=>{Math.random=random})
+  // 0 makes every roll succeed: Miming sets off to visit Onay as soon as it is next idle.
+  Math.random=()=>0
+  const mascot=createLocalMascot(),seen={Miming:new Set(),Onay:new Set()}
+  const home=mascot.snapshot(0).cats[1]
+  assert.deepEqual([home.x,home.y,home.mood],[268,500,'sleeping'])
+  let time=0,snuggleSpread=-1
+  for(;time<20_000;time+=16){
+    if(time===4000)mascot.toss(time)
+    mascot.tick(time,16)
+    const [miming,onay]=mascot.snapshot(time).cats
+    seen.Miming.add(miming.mood);seen.Onay.add(onay.mood)
+    assert.deepEqual([onay.x,onay.y],[268,500],'Onay never walks')
+    if(miming.mood==='snuggling'&&onay.mood==='snuggling')snuggleSpread=Math.max(snuggleSpread,Math.abs(miming.y-onay.y),Math.abs(Math.abs(miming.x-onay.x)-20))
+  }
+  assert.ok(seen.Miming.has('visiting'),'Miming walks over')
+  assert.ok(seen.Miming.has('snuggling')&&seen.Onay.has('snuggling'),'they sit together')
+  assert.equal(snuggleSpread,0,'side by side, 20 px apart')
+  assert.deepEqual([...seen.Onay].filter(mood=>!['sleeping','idle','snuggling'].includes(mood)),[],'Onay only sleeps, stands or snuggles')
+  for(const moods of Object.values(seen))assert.ok(![...moods].some(mood=>/fight|tumble|chas|flee/.test(mood)),'no fighting or chasing')
+
+  const again=createLocalMascot()
+  let t2=0
+  for(;t2<20_000&&again.snapshot(t2).cats[0].mood!=='visiting';t2+=16)again.tick(t2,16)
+  assert.equal(again.pet({x:250,y:500},t2,'Onay'),'petted')
+  again.tick(t2+16,16)
+  const [miming,onay]=again.snapshot(t2+16).cats
+  assert.equal(onay.purring,true)
+  assert.equal(onay.mood,'idle','petting wakes Onay to stand')
+  assert.notEqual(miming.mood,'visiting','petting ends the playdate')
 })
 
 test('legacy character packets cannot reach other visitors; chat remains shared',{timeout:30_000},async t=>{

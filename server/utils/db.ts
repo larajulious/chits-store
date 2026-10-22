@@ -116,6 +116,13 @@ export function db() {
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS order_messages_order_idx ON order_messages(order_id, id);
+      CREATE TABLE IF NOT EXISTS jukebox_settings (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+        voting_enabled INTEGER NOT NULL DEFAULT 1 CHECK (voting_enabled IN (0,1)),
+        track_ids TEXT
+      );
+      INSERT OR IGNORE INTO jukebox_settings(id) VALUES(1);
     `)
     // Add completion without rebuilding legacy tables or changing their status CHECK.
     const connection=database

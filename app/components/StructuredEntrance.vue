@@ -23,8 +23,8 @@ const selected=computed(()=>avatarOptions.find(option=>option.id===props.avatar)
             <div class="store-window left"/><div class="store-window right"/>
             <div class="store-sign">✦ CHITS STORE ✦</div><div class="store-door"/>
             <div v-if="statusReady&&storeOpen" class="store-visitors">
-              <div class="store-visitor visitor-left"><AvatarIcon avatar="mochi"/><span class="visitor-apron"/><span class="visitor-feet"/></div>
-              <div class="store-visitor visitor-right"><AvatarIcon avatar="biko"/><span class="visitor-apron"/><span class="visitor-feet"/></div>
+              <div class="store-visitor visitor-left"><span class="visitor-walk"><PixelSprite name="walk-mochi" :scale="1"/></span></div>
+              <div class="store-visitor visitor-right"><span class="visitor-walk"><PixelSprite name="walk-biko" :scale="1"/></span></div>
             </div>
             <div v-if="statusReady&&!storeOpen" class="store-closed-placard"><span>CLOSED</span></div>
             <div v-if="statusReady&&!storeOpen" class="store-sleep"><span>Z</span><span>Z</span><span>Z</span></div>

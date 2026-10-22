@@ -6,6 +6,8 @@ import { orderStatusLabels,type OrderStatus } from '../../shared/order-status'
 import type { ChatMessage } from '../../shared/chat'
 import type { CustomerOrderSummary, CustomerOrderDetail } from '../../shared/customer-order'
 import {playChatSound} from '../utils/chatSound'
+import type {JukeboxMyVote,JukeboxState} from '../../shared/jukebox'
+import {canSetVolume,createJukeboxPlayer,readJukeboxPrefs,saveJukeboxPrefs,type JukeboxListenStatus,type JukeboxPlayer} from '../utils/jukeboxPlayer'
 const route=useRoute()
 const featureConfig=useRuntimeConfig().public
 // Runtime flags can disable a feature for everyone; query switches isolate one browser for profiling.
@@ -30,13 +32,19 @@ let menuStale=true,menuEpoch=0,wantedMenuVersion:string|null=null,hasWelcomed=fa
 let menuReloadAfterCurrent=false
 const menuDate=computed(()=>menu.value.date===manilaDate()?new Date(`${menu.value.date}T12:00:00`).toLocaleDateString('en-PH',{month:'long',day:'numeric'}):'today')
 const hasCurrentMenu=computed(()=>Boolean(menu.value.version&&menu.value.date===manilaDate()))
+// Item names the walking menu guide may mention; null while today's menu is unknown or has just changed.
+const guideMenuItems=ref<string[]|null>(null)
 const visitorAvatar=computed(()=>isAvatar(me.value?.avatar)?me.value.avatar:'mochi')
 const online=computed(()=>players.value.length)
 const overlay=ref(''), message=ref(''), chat=ref<ChatMessage[]>([]), unreadChat=ref(0), notice=ref(''), connected=ref(false), returningHome=ref(false), chatEnabled=ref(true)
-const musicPlaying=ref(false), musicMuted=ref(false)
-const musicPreferenceKey='chits-store-music-muted'
-let music:HTMLAudioElement|undefined, musicStarting=false, musicGestureListening=false
-const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean|undefined;petCat:()=> 'petted'|'too_far'|'busy'|undefined}|null>(null)
+const jukebox=ref<JukeboxState|null>(null),jukeboxVote=ref<JukeboxMyVote>(null),jukeboxPendingVote=ref(''),jukeboxMessage=ref(''),jukeboxClock=ref(Date.now())
+const musicStatus=ref<JukeboxListenStatus>('off'),musicOn=ref(false),musicVolume=ref(.35),musicVolumeAdjustable=ref(true)
+// The header indicator reads ON only while this visitor actually hears the shared music.
+const musicListening=computed(()=>musicOn.value&&!['off','needs_gesture'].includes(musicStatus.value))
+const jukeboxScene=computed(()=>({playing:Boolean(jukebox.value?.enabled&&jukebox.value.nowPlaying),audible:musicStatus.value==='playing'}))
+let musicPlayer:JukeboxPlayer|undefined,pingSentAt=0
+let jukeboxClockTimer:ReturnType<typeof setInterval>|undefined,jukeboxVoteTimeout:ReturnType<typeof setTimeout>|undefined
+const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean|undefined}|null>(null)
 const leaveDialog=ref<{open:()=>void;close:()=>void}|null>(null),leaving=ref(false)
 const visitThanks=useState<boolean>('visit-thanks',()=>false)
 const feedbackBox=ref<{refresh:()=>Promise<void>}|null>(null)
@@ -47,55 +55,58 @@ const ready=computed(()=>board.value.filter(o=>o.status==='Ready').length)
 const headerTime=computed(()=>new Date().getHours()<12?'Good morning!':new Date().getHours()<18?'Good afternoon!':'Good evening!')
 const statusOptions:Status[]=['Preparing','Ready','Served']
 watch([overlay,chatTab],([value,tab])=>{if(value==='chat'&&tab==='community')unreadChat.value=0})
+// The progress bar ticks only while the jukebox panel is open.
+watch(overlay,value=>{
+  clearInterval(jukeboxClockTimer);jukeboxClockTimer=undefined
+  if(value!=='jukebox')return
+  const tick=()=>{jukeboxClock.value=musicPlayer?.serverNow()??Date.now()}
+  tick();jukeboxClockTimer=setInterval(tick,500)
+})
 onMounted(async()=>{
   document.addEventListener('visibilitychange',onVisibilityChanged)
   scheduleNextMenuDay()
   try { me.value=await $fetch<Me>('/api/me');if(alive)setupMusic();void loadMenu();await Promise.all([loadBoard(),loadOrderInbox()]);if(alive){connect();boardRefresh=setInterval(()=>void loadBoard(),30_000);inboxTimer=setInterval(()=>void pollOrderInbox(),3000)} }
   catch { void returnHome() }
 })
-onBeforeUnmount(()=>{alive=false;document.removeEventListener('visibilitychange',onVisibilityChanged);stopMusic();clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearInterval(inboxTimer);clearTimeout(menuDayTimer);socket?.close()})
-function listenForMusicGesture(){
-  if(musicGestureListening)return
-  document.addEventListener('pointerdown',onMusicGesture)
-  document.addEventListener('keydown',onMusicGesture)
-  musicGestureListening=true
-}
-function stopListeningForMusicGesture(){
-  if(!musicGestureListening)return
-  document.removeEventListener('pointerdown',onMusicGesture)
-  document.removeEventListener('keydown',onMusicGesture)
-  musicGestureListening=false
-}
-function onMusicGesture(event:Event){
-  if((event.target as Element|null)?.closest?.('.music-toggle'))return
-  void startMusic()
-}
+onBeforeUnmount(()=>{alive=false;document.removeEventListener('visibilitychange',onVisibilityChanged);stopMusic();clearInterval(jukeboxClockTimer);clearTimeout(jukeboxVoteTimeout);clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearInterval(inboxTimer);clearTimeout(menuDayTimer);socket?.close()})
 function setupMusic(){
-  try{musicMuted.value=localStorage.getItem(musicPreferenceKey)==='true'}catch{}
-  music=new Audio('/chits-store-cozy-cafe-loop.mp3')
-  music.loop=true
-  music.volume=.12
-  music.preload='none'
-  if(!musicMuted.value){listenForMusicGesture();void startMusic()}
+  const prefs=readJukeboxPrefs()
+  musicOn.value=prefs.on;musicVolume.value=prefs.volume;musicVolumeAdjustable.value=canSetVolume()
+  musicPlayer=createJukeboxPlayer(status=>{musicStatus.value=status})
+  musicPlayer.setVolume(prefs.volume)
+  // A remembered "on" still waits for the browser: the player asks for a tap if autoplay is blocked.
+  if(prefs.on)musicPlayer.enable()
 }
-async function startMusic(){
-  const track=music
-  if(!track||musicMuted.value||musicStarting||!alive||returningHome.value||document.hidden||!track.paused)return
-  musicStarting=true
-  try{
-    await track.play()
-    if(!alive||musicMuted.value||returningHome.value||document.hidden){track.pause();return}
-    musicPlaying.value=true
-    stopListeningForMusicGesture()
-  }catch{musicPlaying.value=false}
-  finally{musicStarting=false}
-}
+function saveMusicPrefs(){saveJukeboxPrefs({on:musicOn.value,volume:musicVolume.value})}
 function toggleMusic(){
-  if(musicPlaying.value){musicMuted.value=true;music?.pause();musicPlaying.value=false;stopListeningForMusicGesture()}
-  else{musicMuted.value=false;listenForMusicGesture();void startMusic()}
-  try{localStorage.setItem(musicPreferenceKey,String(musicMuted.value))}catch{}
+  if(!musicPlayer)return
+  if(musicOn.value&&musicStatus.value==='needs_gesture'){musicPlayer.resume();return}
+  musicOn.value=!musicOn.value
+  if(musicOn.value)musicPlayer.enable();else musicPlayer.disable()
+  saveMusicPrefs()
 }
-function stopMusic(){music?.pause();music=undefined;musicPlaying.value=false;stopListeningForMusicGesture()}
+function setMusicVolume(value:number){musicVolume.value=value;musicPlayer?.setVolume(value);saveMusicPrefs()}
+function stopMusic(){musicPlayer?.dispose();musicPlayer=undefined;musicStatus.value='off'}
+function ping(){pingSentAt=Date.now();send({type:'ping'})}
+function applyJukebox(state:JukeboxState,myVote?:JukeboxMyVote){
+  const roundChanged=jukebox.value?.round!==state.round
+  musicPlayer?.noteStateTime(state.serverNow)
+  jukebox.value=state
+  if(myVote!==undefined)jukeboxVote.value=myVote
+  else if(roundChanged)jukeboxVote.value=null
+  if(roundChanged){jukeboxPendingVote.value='';jukeboxMessage.value=''}
+  musicPlayer?.setTimeline(state.enabled?state.nowPlaying:null)
+}
+function voteJukebox(trackId:string){
+  const state=jukebox.value
+  if(!state?.votingEnabled||!connected.value||jukeboxPendingVote.value)return
+  if(jukeboxVote.value?.round===state.round&&jukeboxVote.value.trackId===trackId)return
+  jukeboxPendingVote.value=trackId;jukeboxMessage.value=''
+  send({type:'jukebox_vote',trackId,round:state.round})
+  clearTimeout(jukeboxVoteTimeout)
+  jukeboxVoteTimeout=setTimeout(()=>{if(jukeboxPendingVote.value===trackId){jukeboxPendingVote.value='';jukeboxMessage.value='Your vote did not go through. Please try again.'}},5000)
+}
+const jukeboxRejections:Record<string,string>={disabled:'The jukebox is off right now.',voting_off:'Song voting is paused by staff.',round_closed:'That round just ended. Vote again for the next song.',not_candidate:'That song is no longer on the list.',slow_down:'Please wait a moment before changing your vote.'}
 async function loadBoard(){try{board.value=await $fetch<PublicOrder[]>('/api/orders/board')}catch{}}
 function money(cents:number){return `₱${(cents/100).toFixed(2)}`}
 function changeQuantity(id:number,amount:number){const next=Math.max(0,Math.min(20,(cart.value[id]||0)+amount));cart.value={...cart.value,[id]:next};checkoutError.value=''}
@@ -159,7 +170,7 @@ function scheduleNextMenuDay(){
   const [year,month,day]=manilaDate().split('-').map(Number) as [number,number,number]
   const next=Date.UTC(year,month-1,day+1)-8*60*60_000+1000
   menuDayTimer=setTimeout(()=>{
-    menuStale=true;menuEpoch++
+    menuStale=true;menuEpoch++;guideMenuItems.value=null
     if(!document.hidden)void loadMenu(true)
     scheduleNextMenuDay()
   },Math.max(1000,next-Date.now()))
@@ -177,6 +188,7 @@ async function loadMenu(force=false){
     menu.value=current
     menuStale=(startedAtEpoch!==menuEpoch&&(!wantedMenuVersion||current.version!==wantedMenuVersion))||current.date!==manilaDate()
     if(!menuStale)wantedMenuVersion=null
+    guideMenuItems.value=menuStale?null:current.items.map(item=>item.name)
   }catch{menuStale=true;menuError.value='Could not load today’s menu. Please try again.'}
   finally{
     menuLoading.value=false
@@ -186,14 +198,14 @@ async function loadMenu(force=false){
 function onMenuUpdated(version:unknown){
   const next=typeof version==='string'?version:null
   if(next&&(next===menu.value.version||next===wantedMenuVersion))return
-  wantedMenuVersion=next;menuStale=true;menuEpoch++
+  wantedMenuVersion=next;menuStale=true;menuEpoch++;guideMenuItems.value=null
   if(overlay.value==='menu'&&!document.hidden)void loadMenu(true)
 }
 function onVisibilityChanged(){
-  if(document.hidden){music?.pause();musicPlaying.value=false;hiddenAt=Date.now();return}
+  musicPlayer?.setHidden(document.hidden)
+  if(document.hidden){hiddenAt=Date.now();return}
   if(overlay.value==='chat'&&chatTab.value==='community')unreadChat.value=0
   void loadOrderInbox()
-  if(!musicMuted.value){listenForMusicGesture();void startMusic()}
   if(menuStale||menu.value.date!==manilaDate()||(hiddenAt&&Date.now()-hiddenAt>5000)){
     menuStale=true;menuEpoch++;void loadMenu(true)
   }
@@ -212,7 +224,7 @@ function connect(){
   if(!alive||returningHome.value)return
   const current=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`)
   socket=current
-  current.onopen=()=>{clearInterval(heartbeat);heartbeat=setInterval(()=>send({type:'ping'}),20_000)}
+  current.onopen=()=>{clearInterval(heartbeat);ping();heartbeat=setInterval(ping,20_000)}
   current.onmessage=async evt=>{
     if(returningHome.value)return
     let data:any; try{data=JSON.parse(evt.data)}catch{return}
@@ -255,6 +267,11 @@ function connect(){
         if(data.order?.status==='Delivered') notice.value=`✓ Your order #${data.order.number} has been delivered. Thank you!`
       }
     }
+    if(data.type==='pong'&&typeof data.serverTime==='number')musicPlayer?.noteServerTime(data.serverTime,pingSentAt,Date.now())
+    if(data.type==='jukebox'&&data.state&&typeof data.state==='object')applyJukebox(data.state,data.myVote)
+    if(data.type==='jukebox_votes'&&jukebox.value&&data.round===jukebox.value.round)jukebox.value={...jukebox.value,votes:data.votes||{},upNext:data.upNext??null}
+    if(data.type==='jukebox_vote_ok'){clearTimeout(jukeboxVoteTimeout);jukeboxPendingVote.value='';if(jukebox.value?.round===data.round)jukeboxVote.value={round:data.round,trackId:data.trackId}}
+    if(data.type==='jukebox_vote_rejected'){clearTimeout(jukeboxVoteTimeout);jukeboxPendingVote.value='';jukeboxMessage.value=jukeboxRejections[data.reason]||'Could not save your vote.'}
     if(data.type==='chat_enabled'){chatEnabled.value=data.enabled}
     if(data.type==='chat_blocked')notice.value='Chat is unavailable right now.'
     if(data.type==='chat_slow_down')notice.value='Please slow down your messages.'
@@ -273,8 +290,7 @@ function connect(){
 function send(data:object){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(data))}
 function sendChat(){const text=message.value.trim();if(!connected.value||!text||text.length>160||!chatEnabled.value)return;send({type:'chat',text});message.value=''}
 function openChat(){chatTab.value='community';overlay.value='chat'}
-function interact(kind:string){overlay.value=kind;if(kind==='menu')void loadMenu()}
-function petCat(){if(game.value?.petCat()==='too_far')notice.value='Walk closer to Miming to pet the cat.'}
+function interact(kind:string){if(kind==='leave'){leaveDialog.value?.open();return}overlay.value=kind;if(kind==='menu')void loadMenu()}
 async function leave(){
   if(leaving.value)return
   leaving.value=true;visitThanks.value=true
@@ -284,28 +300,32 @@ async function leave(){
 </script>
 <template><main class="game-shell structured-store">
   <header class="structured-store-top">
-    <div class="visitor-identity"><span class="visitor-portrait"><AvatarIcon :avatar="visitorAvatar"/></span><div><strong>CHITS STORE</strong><span>{{ me?.nickname || 'Public bakery' }}</span></div></div>
-    <div class="visit-status"><span class="pill" :class="{ready:connected}">{{ connected?'● Connected':'○ Connecting' }}</span><div class="visit-tools"><span class="visitor-count"><StoreGlyph name="people"/>{{ online }} online</span><button type="button" class="music-toggle" :aria-label="musicPlaying?'Mute background music':'Play background music'" :aria-pressed="musicPlaying" :disabled="!me||returningHome" @click="toggleMusic"><span aria-hidden="true">♫</span>{{ musicPlaying?'ON':'OFF' }}</button></div></div>
+    <div class="visitor-identity"><span class="visitor-portrait"><PixelSprite :name="`head-${visitorAvatar}`" :scale="2"/></span><div class="visitor-copy"><span>CHITS STORE</span><strong :title="me?.nickname">{{ me?.nickname || 'Guest' }}</strong></div></div>
+    <div class="visit-status">
+      <span class="connection-pill" :class="{ready:connected}" role="status"><span class="connection-dot" aria-hidden="true"/>{{ connected?`${online} online`:'Connecting' }}</span>
+      <button type="button" class="music-toggle" data-music-control :aria-label="musicListening?'Mute jukebox music':'Turn on jukebox music'" :aria-pressed="musicListening" :title="jukebox?.enabled&&jukebox.nowPlaying?`Now playing: ${jukebox.nowPlaying.track.title}`:undefined" :disabled="!me||returningHome" @click="toggleMusic"><StoreGlyph name="note"/>{{ musicListening?'Music on':'Music off' }}</button>
+    </div>
   </header>
   <template v-if="me&&!returningHome">
-    <div class="bakery-status-strip"><span>INSIDE THE MERYENDA HUB</span><div><span>{{ preparing }} preparing</span><span class="ready-count">{{ ready }} ready</span></div><aside v-if="notice" class="structured-notice" role="status"><strong>{{ notice }}</strong><button type="button" aria-label="Dismiss notice" @click="notice=''">✕</button></aside></div>
     <div class="game-stage">
-      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact" @cat-hint="notice='Walk closer to Miming to pet the cat.'"/></ClientOnly>
+      <aside v-if="notice" class="structured-notice" role="status"><strong>{{ notice }}</strong><button type="button" aria-label="Dismiss notice" @click="notice=''">✕</button></aside>
+      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving" :jukebox="jukeboxScene" :menu-items="guideMenuItems" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact"/></ClientOnly>
     </div>
     <button v-if="featuredOrder" type="button" class="order-inbox-shortcut" :class="{'has-reply':privateUnread>0}" :aria-label="privateUnread?`Order inbox, ${privateUnread} unread staff ${privateUnread===1?'reply':'replies'}. Open order ${featuredOrder.number}`:`Open order inbox for order ${featuredOrder.number}`" @click="openOrderInbox(featuredOrder.id)"><span class="order-inbox-shortcut-icon"><StoreGlyph name="chat"/><span v-if="privateUnread" class="order-inbox-shortcut-count" aria-hidden="true">{{ privateUnread>9?'9+':privateUnread }}</span></span><span class="order-inbox-shortcut-copy"><strong>{{ privateUnread?'New reply from staff':'Your order inbox' }}</strong><small>Order #{{ featuredOrder.number }}{{ featuredOrder.name?` · ${featuredOrder.name}`:'' }} · {{ orderStatusLabels[featuredOrder.status] }}</small></span><span class="order-inbox-shortcut-action">{{ privateUnread?'Read reply':'Open inbox' }} →</span></button>
     <nav class="structured-actions" aria-label="Store actions">
       <button type="button" class="store-chat-action" aria-label="Chat" :aria-describedby="allUnread?'store-chat-unread':undefined" @click="openChat"><StoreGlyph name="chat"/><span>Chat</span><span v-if="allUnread" class="chat-unread-badge" aria-hidden="true">{{ allUnread>9?'9+':allUnread }}</span><span id="store-chat-unread" class="chat-sr-only">{{ allUnread }} unread {{ allUnread===1?'message':'messages' }}</span></button>
-      <button type="button" @click="interact('menu')"><StoreGlyph name="menu"/><span>Menu</span></button>
+      <button type="button" @click="interact('menu')"><StoreGlyph name="book"/><span>Menu</span></button>
       <button type="button" @click="overlay='board'"><StoreGlyph name="orders"/><span>Orders</span></button>
-      <button type="button" @click="overlay='emotes'"><StoreGlyph name="smile"/><span>Emotes</span></button>
-      <button type="button" @click="overlay='feedback'"><StoreGlyph name="feedback"/><span>Feedback</span></button>
+      <button type="button" @click="overlay='emotes'"><StoreGlyph name="cat"/><span>Emotes</span></button>
+      <button type="button" @click="overlay='feedback'"><StoreGlyph name="pencil"/><span>Feedback</span></button>
       <button type="button" @click="leaveDialog?.open()"><StoreGlyph name="door"/><span>Leave</span></button>
     </nav>
-    <div v-if="catEnabled" class="help-text structured-hint" style="background:#fff7e8;text-align:center;padding-bottom:9px"><span>Drag yarn · tap Miming to pet</span><button type="button" class="yarn-toss" :disabled="!!overlay" @click="petCat">Pet cat</button><button type="button" class="yarn-toss" aria-label="Toss yarn for Miming the shop cat" :disabled="!!overlay" @click="game?.tossYarn()">Toss yarn</button></div>
-    <div v-if="overlay" class="overlay-shade" :class="{'chat-overlay':overlay==='chat'}" @click.self="overlay=''">
-      <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback','chat-dialog':overlay==='chat','order-chat-dialog':overlay==='chat'&&chatTab==='orders'&&!!selectedOrderId}" role="dialog" aria-labelledby="store-dialog-title">
-        <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ overlay==='chat'?(chatTab==='orders'?'Order inbox':'Community chat'):{menu:"Today's Menu",board:'Live Order Board',cashier:'Staff',chef:'Chef',seat:'Take a Seat',emotes:'Reactions',feedback:'Feedback box'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
+    <div v-if="catEnabled" class="structured-hint"><p class="cat-hint-copy"><span class="cat-hint-faces"><PixelSprite name="cat-face" :scale="2"/><PixelSprite name="onay-face" :scale="2"/></span><span>Drag yarn · tap Miming or Onay to pet</span></p><button type="button" class="cat-action toss-yarn" aria-label="Toss yarn for Miming and Onay, the shop cats" :disabled="!!overlay" @click="game?.tossYarn()"><StoreGlyph name="yarn"/>Toss yarn</button></div>
+    <div v-if="overlay" class="overlay-shade" :class="{'chat-overlay':overlay==='chat'||overlay==='jukebox'}" @click.self="overlay=''">
+      <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback','chat-dialog':overlay==='chat','jukebox-dialog':overlay==='jukebox','order-chat-dialog':overlay==='chat'&&chatTab==='orders'&&!!selectedOrderId}" role="dialog" aria-labelledby="store-dialog-title">
+        <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ overlay==='chat'?(chatTab==='orders'?'Order inbox':'Community chat'):{menu:"Today's Menu",board:'Live Order Board',cashier:'Staff',chef:'Chef',emotes:'Reactions',feedback:'Feedback box',jukebox:'Jukebox'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
         <FeedbackBox v-if="overlay==='feedback'" ref="feedbackBox"/>
+        <JukeboxPanel v-if="overlay==='jukebox'" :state="jukebox" :my-vote="jukeboxVote" :pending-vote="jukeboxPendingVote" :message="jukeboxMessage" :status="musicStatus" :music-on="musicOn" :volume="musicVolume" :volume-adjustable="musicVolumeAdjustable" :server-now="jukeboxClock" :connected="connected" @vote="voteJukebox" @toggle="toggleMusic" @volume="setMusicVolume"/>
         <template v-if="overlay==='menu'">
           <p class="menu-greeting">🍡 Hi, {{ me.nickname }}! Here’s the meryenda for {{ menuDate }}.</p>
           <p v-if="!hasCurrentMenu&&menuLoading" class="menu-message">Checking today’s menu…</p>
@@ -325,7 +345,6 @@ async function leave(){
         </template>
         <template v-else-if="overlay==='cashier'"><p>🍮 {{ headerTime }} Welcome to Chits Store, {{ me.nickname }}!</p><p>{{ preparing }} order(s) preparing · {{ ready }} ready. You can check the live board anytime.</p><button class="btn small dialog-action" @click="overlay='board'">View orders</button><p class="help-text">Tap anywhere on the floor or use the joystick to move. Tap the chef or order board to interact.</p></template>
         <template v-else-if="overlay==='chef'"><p>👨‍🍳 🍡 {{ preparing ? 'Stirring up tasty orders right now!' : 'Trying a fresh batch of meryenda!' }}</p><p class="help-text">Only staff can change real order statuses.</p></template>
-        <template v-else-if="overlay==='seat'"><p>☕ Make yourself comfortable! Say hi to everyone while you wait.</p><button class="btn small dialog-action" @click="overlay='chat'">Join conversation</button></template>
         <template v-else-if="overlay==='emotes'"><div class="reaction-grid"><button v-for="reaction in reactionOptions" :key="reaction.emoji" type="button" class="btn secondary reaction-choice" @click="send({type:'emote',emoji:reaction.emoji});overlay=''"><PixelReaction class="reaction-symbol" :emoji="reaction.emoji"/><span>{{ reaction.label }}</span></button></div></template>
         <template v-else-if="overlay==='chat'">
           <div class="chat-tabs" role="tablist" aria-label="Chat conversations"><button type="button" role="tab" :aria-selected="chatTab==='community'" @click="chatTab='community'">Community <span v-if="unreadChat">{{ unreadChat }}</span></button><button type="button" role="tab" :aria-selected="chatTab==='orders'" @click="chatTab='orders';void loadOrderInbox()">Order inbox <span v-if="privateUnread">{{ privateUnread }}</span></button></div>
@@ -353,18 +372,7 @@ async function leave(){
   <VisitDialog ref="leaveDialog" variant="leave" :busy="leaving" @confirm="leave"/>
 </main></template>
 <style scoped>
-.structured-store{width:min(100%,480px);height:calc(100dvh - 48px);min-height:640px;max-height:960px;margin:24px auto;overflow:hidden;border:1px solid #d8c6ad;border-radius:22px;background:#fffaf1;box-shadow:0 12px 36px #64442d12}
-.structured-store-top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;background:#fffaf1;border-bottom:1px solid #e7dac8;flex-shrink:0}
-.visitor-identity{display:flex;align-items:center;gap:10px;min-width:0}.visitor-portrait{width:42px;height:42px;border:1px solid #e5d8c0;border-radius:12px;background:#efe4d0;display:grid;place-items:center;flex-shrink:0}.visitor-portrait :deep(.avatar-symbol){transform:scale(.78)}.visitor-identity strong{display:block;font-size:12px;letter-spacing:.12em;color:#523b2a}.visitor-identity div>span{display:block;margin-top:5px;font-size:11px;color:#9b8065;overflow-wrap:anywhere}.visit-status{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}.visit-status .pill{padding:4px 8px;font-size:10px}.visitor-count{display:flex;align-items:center;gap:5px;font-size:10px;color:#8f795e}.visitor-count svg{width:13px;height:13px}
-.bakery-status-strip{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;padding:11px 18px;background:#f5ecdd;border-bottom:1px solid #d8c09e}.bakery-status-strip>span{color:#9c7f5a;font-size:9px;letter-spacing:.1em;font-weight:800}.bakery-status-strip>div{display:flex;gap:12px;color:#9a7554;font-size:10px}.bakery-status-strip .ready-count{color:#647d52;font-weight:700}
-.structured-store .game-stage{flex:1;min-height:0;background:#dab080}.structured-actions{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;padding:12px 14px 10px;background:#fffaf1;border-top:1px solid #e1ccb0;flex-shrink:0}.structured-actions button,.structured-actions a{min-width:0;min-height:59px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:#f7efe1;border:1px solid #e6d7c0;border-radius:12px;color:#86694a;text-decoration:none;font-size:10px;font-weight:800;box-shadow:none}.structured-actions button:hover,.structured-actions a:hover{background:#eee0c9;border-color:#cdb18b;color:#65462d}.structured-actions svg{width:20px;height:20px}.structured-actions button:focus-visible,.structured-actions a:focus-visible{outline:3px solid #6c875d;outline-offset:2px}
-.structured-store .structured-hint{background:#fffaf1!important;color:#a08a70;font-size:9px;padding:0 12px 12px!important;flex-shrink:0}.structured-notice{border-bottom:1px solid #d3dfc0;flex-shrink:0}.structured-notice strong{font-size:11px!important;font-weight:700;color:#577149}.structured-notice button{padding:4px 7px;border:0;background:transparent;box-shadow:none;color:#70845b}.structured-store .overlay-shade{padding:14px;background:#33271985;backdrop-filter:blur(2px)}.structured-store .overlay-panel{padding:20px;background:#fffaf1;border:1px solid #ddcbb3;border-radius:20px;box-shadow:0 6px 24px #3c281e21;gap:16px}.structured-store .overlay-panel .section-head{font-size:19px;letter-spacing:-.04em;color:#533d2b}.structured-store .overlay-panel .btn.secondary{box-shadow:none;border-width:1px;background:#f4ead9}.structured-store .chat-messages{border:1px solid #e8dac5;background:#f7f0e4;padding:12px;height:220px}.structured-store .chat-line{font-size:12px;line-height:1.6}.structured-store .chat-line strong{color:#886748}.structured-store .privacy{margin:0;font-size:10px;line-height:1.7;color:#9b846a}.structured-store .overlay-panel .input{font-size:12px;border-width:1px;background:#fffdf7;padding:11px 12px}.structured-store .overlay-panel .pill{font-size:11px;padding:7px 10px}.structured-store>.page{min-height:0;flex:1;font-size:12px;color:#90775d}
-.structured-store .structured-hint{display:flex;align-items:center;justify-content:center;gap:8px;min-height:36px;padding:2px 12px 9px!important;line-height:1.3}.structured-hint span{min-width:0}.structured-store .yarn-toss{flex-shrink:0;min-height:27px;padding:3px 7px;border:1px solid #8b6888;border-radius:4px;background:#e6cfdf;box-shadow:2px 2px 0 #8b6888;color:#553e5a;font:700 9px Silkscreen,monospace;cursor:pointer}.structured-store .yarn-toss:focus-visible{outline:3px solid #6c875d;outline-offset:2px}.structured-store .yarn-toss:disabled{opacity:.5;cursor:default}
-.structured-store .game-stage :deep(canvas){touch-action:none}
-.visit-tools{display:flex;align-items:center;gap:8px}.music-toggle{display:inline-flex;align-items:center;justify-content:center;gap:3px;min-width:45px;min-height:24px;padding:2px 4px;border:1px solid #a17b50;border-radius:0;background:#eddbb8;color:#674731;font:9px Silkscreen,monospace;line-height:1}.music-toggle[aria-pressed="true"]{background:#d3e3b1;border-color:#91aa6f;color:#3e5939}.music-toggle span{font:15px 'Courier New',monospace}
-.bakery-status-strip .structured-notice{position:absolute;top:calc(100% + 8px);left:12px;right:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;padding:9px 10px;background:#e7f3d4;border:2px solid #8a9d67;box-shadow:3px 3px 0 #67473155}
-.structured-notice strong{min-width:0;line-height:1.4;overflow-wrap:anywhere}
-.structured-notice button{display:grid;place-items:center;flex-shrink:0;width:32px;height:32px;padding:0;color:#577149;font-size:19px;line-height:1}
+.structured-store .overlay-shade{padding:14px;background:#33271985;backdrop-filter:blur(2px)}.structured-store .overlay-panel{padding:20px;background:#fffaf1;border:1px solid #ddcbb3;border-radius:20px;box-shadow:0 6px 24px #3c281e21;gap:16px}.structured-store .overlay-panel .section-head{font-size:19px;letter-spacing:-.04em;color:#533d2b}.structured-store .overlay-panel .btn.secondary{box-shadow:none;border-width:1px;background:#f4ead9}.structured-store .chat-messages{border:1px solid #e8dac5;background:#f7f0e4;padding:12px;height:220px}.structured-store .chat-line{font-size:12px;line-height:1.6}.structured-store .chat-line strong{color:#886748}.structured-store .privacy{margin:0;font-size:10px;line-height:1.7;color:#9b846a}.structured-store .overlay-panel .input{font-size:12px;border-width:1px;background:#fffdf7;padding:11px 12px}.structured-store .overlay-panel .pill{font-size:11px;padding:7px 10px}.structured-store>.page{min-height:0;flex:1;font-size:12px;color:#90775d}
 .game-shell .store-dialog{min-width:0;gap:14px;padding:18px;overscroll-behavior:contain}
 .game-shell .feedback-dialog{--feedback-padding:18px}.game-shell .feedback-dialog .dialog-header{position:sticky;top:calc(-1 * var(--feedback-padding));margin-top:calc(-1 * var(--feedback-padding));padding-top:var(--feedback-padding);z-index:1;background:#fff3da}
 .dialog-header{display:grid;grid-template-columns:minmax(0,1fr) 36px;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid #e5d7c3}
@@ -380,11 +388,11 @@ async function leave(){
 .game-shell .store-dialog .chat-messages{min-width:0;height:clamp(110px,26dvh,220px);margin:0}.chat-empty{padding:8px;line-height:1.6}.chat-line{min-width:0}
 .reaction-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:stretch;gap:8px}.game-shell .store-dialog .reaction-choice{min-width:0;min-height:82px;padding:12px 4px;flex-direction:column;gap:8px;border-radius:12px;font-size:10px}.reaction-symbol{display:block;font-size:26px;line-height:1}
 .store-dialog button:focus-visible,.store-dialog input:focus-visible{outline:3px solid #6c875d;outline-offset:2px}
-@media(max-width:599px){.game-shell .feedback-dialog{--feedback-padding:16px}.structured-store{height:100dvh;min-height:520px;width:100%;max-height:none;margin:0;border:0;border-radius:0;box-shadow:none}.structured-store-top{padding:14px 16px}.bakery-status-strip{padding:10px 16px}.structured-actions{padding-inline:12px;gap:7px}.structured-store .overlay-panel{max-height:min(78dvh,600px)}.game-shell .overlay-shade{padding:12px}.game-shell .store-dialog{padding:16px;gap:12px}.game-shell .dialog-header .section-head{font-size:18px}.reaction-grid{gap:6px}}
-@media(max-width:360px){.structured-actions{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:7px}.structured-actions button{min-height:43px;flex-direction:row;gap:4px}.structured-actions svg{width:17px;height:17px}}
+@media(max-width:599px){.game-shell .feedback-dialog{--feedback-padding:16px}.structured-store .overlay-panel{max-height:min(78dvh,600px)}.game-shell .overlay-shade{padding:12px}.game-shell .store-dialog{padding:16px;gap:12px}.game-shell .dialog-header .section-head{font-size:18px}.reaction-grid{gap:6px}}
 @media(prefers-reduced-motion:reduce){.structured-store .overlay-shade{backdrop-filter:none}}
 .visitor-menu li{align-items:center}.menu-item-label{display:grid;gap:3px;min-width:0}.menu-item-label span{font-weight:700}.menu-quantity{display:flex;align-items:center;gap:7px;flex-shrink:0}.menu-quantity button{width:29px;height:29px;border:2px solid #765337;background:#fff5df;color:#674731;font:16px/1 Silkscreen,monospace}.menu-quantity>span{min-width:18px;text-align:center;font:11px Silkscreen,monospace}.cart-summary,.order-chat-summary{display:grid;gap:8px;padding:12px;border:2px solid #c7a576;background:#f5e8ce;font-size:12px}.cart-summary>div,.order-chat-summary>div{display:flex;justify-content:space-between;gap:10px}.cart-summary>div span:first-child,.order-chat-summary>div span:first-child{min-width:0;overflow-wrap:anywhere}.cart-summary .cart-total,.order-chat-summary .cart-total{padding-top:8px;border-top:1px dashed #b69464;font:11px Silkscreen,monospace}.cart-summary>.btn{width:100%;border-radius:0;font:11px Silkscreen,monospace}.chat-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px}.chat-tabs button{min-height:38px;border:2px solid #c7a576;background:#f5e8ce;color:#674731;font:10px Silkscreen,monospace}.chat-tabs button[aria-selected="true"]{background:#ddc399;border-color:#674731}.chat-tabs button span,.order-inbox-unread{display:inline-grid;place-items:center;min-width:17px;height:17px;padding:2px;background:#ad513f;color:#fff7e5;font:9px Silkscreen,monospace}.order-inbox-list{display:flex;gap:7px;overflow-x:auto;overscroll-behavior-x:contain;padding:2px 2px 7px}.order-inbox-list button{display:grid;gap:5px;flex:0 0 126px;min-height:56px;text-align:left;padding:7px;border:2px solid #c7a576;background:#fff7e5;color:#674731}.order-inbox-list button.selected{border-color:#674731;background:#e7d2ab}.order-inbox-list button strong{font:11px Silkscreen,monospace}.order-inbox-list button small{font:10px 'Courier New',monospace;line-height:1.4}.structured-store .order-chat-messages{height:clamp(100px,20dvh,180px)}
 .game-shell .store-dialog.order-chat-dialog{max-height:min(78dvh,620px)}
+.game-shell .store-dialog.jukebox-dialog{max-height:min(78dvh,640px);overflow-y:auto}
 .order-inbox-shortcut{display:flex;align-items:center;gap:11px;flex-shrink:0;min-width:0;min-height:62px;width:100%;padding:9px 16px;border:0;border-top:3px solid #674731;background:#f6e8c9;color:#674731;text-align:left;box-shadow:inset 0 2px #fff8e7}.order-inbox-shortcut.has-reply{background:#e4edcf}.order-inbox-shortcut-icon{position:relative;display:grid;place-items:center;flex:0 0 35px;width:35px;height:35px;border:2px solid #674731;background:#fff6df}.order-inbox-shortcut-icon svg{width:20px;height:20px}.order-inbox-shortcut-count{position:absolute;top:-9px;right:-8px;display:grid;place-items:center;min-width:19px;height:19px;padding:1px 3px;border:2px solid #fff6df;background:#ad513f;color:#fff9e9;font:9px Silkscreen,monospace}.order-inbox-shortcut-copy{display:grid;gap:3px;flex:1;min-width:0}.order-inbox-shortcut-copy strong{font:11px/1.3 Silkscreen,monospace}.order-inbox-shortcut-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px/1.3 'Courier New',monospace}.order-inbox-shortcut-action{flex-shrink:0;font:9px/1.3 Silkscreen,monospace;text-align:right}.order-inbox-shortcut:focus-visible{outline:3px solid #617e4d;outline-offset:-5px}
 .order-chat-summary{display:block;flex-shrink:0;max-height:116px;overflow:auto}.order-chat-summary summary{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;list-style:none;line-height:1.5}.order-chat-summary summary::-webkit-details-marker{display:none}.order-chat-summary summary>span{min-width:0;overflow-wrap:anywhere}.order-chat-summary summary strong{font-family:Silkscreen,monospace;font-weight:400;font-size:10px}.order-chat-summary summary small{flex-shrink:0;color:#674731;font:9px Silkscreen,monospace}.order-chat-summary[open] summary{padding-bottom:8px;border-bottom:1px dashed #b69464}.order-chat-summary>div{display:flex;justify-content:space-between;gap:9px;padding-top:6px}.order-chat-summary>div span:first-child{min-width:0;overflow-wrap:anywhere}
 @media(max-width:360px){.order-inbox-shortcut{padding-inline:11px;gap:8px}.order-inbox-shortcut-action{font-size:8px}.order-inbox-shortcut-copy strong{font-size:10px}}

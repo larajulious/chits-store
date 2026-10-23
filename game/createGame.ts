@@ -37,16 +37,24 @@ const JUKEBOX={x:328,y:227,standX:320,standY:300,depth:256}
 // before the menu is posted the guide only says it's on the way.
 const GUIDE_LINES=["Have you checked today's menu?",'Meryenda time! Tap me for the menu.',"Hungry? Today's menu is ready!",'Psst... tap me to see the menu!','Gutom ka na? Check the menu!','Something sweet is on the menu today!','Fresh meryenda today. Come see!']
 const GUIDE_ITEM_LINES=['Try the {item} today!',"{item} is on today's menu!",'Have you tried our {item}?','Craving {item}? Tap me!','Fresh {item}, just for you!']
+const HALLOWEEN_GUIDE_LINES=['Happy Halloween! Treat yourself to meryenda.','Trick or treat? Tap me for the menu!','Psst... try tapping the pumpkins!']
+const HALLOWEEN_LINES={carved:['Boo!','Hehehe!','Boo! Did I scare you?'],plain:['Trick or treat!','Here, have a treat!'],bat:['Squeak!','Eek!']}
 const GUIDE_WAITING_LINES=["Today's menu is still cooking!",'The menu will be posted soon!','Staff are planning a tasty menu...']
 function guideLine(items:string[]|null,previous:string){
   const item=()=>{const name=items![Math.floor(Math.random()*items!.length)]!;return name.length>18?`${name.slice(0,17).trimEnd()}…`:name}
   const random=(lines:string[])=>lines[Math.floor(Math.random()*lines.length)]!
+  const general=isHalloweenSeason()?[...GUIDE_LINES,...HALLOWEEN_GUIDE_LINES]:GUIDE_LINES
   // A few tries so the same sentence is rarely said twice in a row.
   for(let i=0;i<5;i++){
-    const line=items&&!items.length?random(GUIDE_WAITING_LINES):items&&Math.random()<.5?random(GUIDE_ITEM_LINES).replace('{item}',item()):random(GUIDE_LINES)
+    const line=items&&!items.length?random(GUIDE_WAITING_LINES):items&&Math.random()<.5?random(GUIDE_ITEM_LINES).replace('{item}',item()):random(general)
     if(line!==previous)return line
   }
   return random(GUIDE_LINES)
+}
+// Halloween decorations stay up through Undas (Nov 1-2), on the store's Manila calendar.
+function isHalloweenSeason(now=new Date()){
+  const [month,day]=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',month:'numeric',day:'numeric'}).format(now).split('/').map(Number)
+  return month===10||(month===11&&day!<=2)
 }
 const menuGuideStops=[{x:120,y:440},{x:160,y:300},{x:200,y:280},{x:280,y:420},{x:220,y:530},{x:200,y:400},{x:230,y:540}]
 function bounded(x:number,y:number){return Math.max(20,Math.min(340,x))>=20&&x>=20&&x<=340&&y>=260&&y<=542&&!obstructions.some(r=>r.contains(x,y))}
@@ -155,6 +163,11 @@ class StoreScene extends Phaser.Scene {
   private jukebox?:Phaser.GameObjects.Image
   private jukeboxNotes:Phaser.GameObjects.Image[]=[]
   private jukeboxState:JukeboxScene={playing:false,audible:false}
+  // Tappable Halloween decorations. Times are scene time; flaredUntil/flyingSince drive their reactions.
+  private pumpkins:{sprite:Phaser.GameObjects.Image;y:number;carved:boolean;tappedAt:number;flaredUntil:number}[]=[]
+  private bats:{sprite:Phaser.GameObjects.Image;x:number;y:number;inward:1|-1;flyingSince:number}[]=[]
+  private decorBubble?:Tag
+  private decorBubbleTimer?:Phaser.Time.TimerEvent
   private draggingYarn?:{pointerId:number;lastX:number;lastY:number;lastAt:number;previousX:number;previousY:number;previousAt:number}
   constructor(opts:Options){super('Store');this.opts=opts;this.zoom=opts.zoom??1;if(opts.catEnabled!==false)this.mascot=createLocalMascot()}
   private texture(name:string,pixels:art.PixelArt){if(!this.textures.exists(name))this.textures.addCanvas(name,pixels.toCanvas())}
@@ -194,6 +207,9 @@ class StoreScene extends Phaser.Scene {
     this.sprite(122,196,'register',205)
     this.sprite(256,202,'clipboard',205)
     this.sprite(280,197,'plant-small',205)
+    const halloween=isHalloweenSeason()
+    const pumpkin=(sprite:Phaser.GameObjects.Image,carved:boolean)=>this.pumpkins.push({sprite,y:sprite.y,carved,tappedAt:-Infinity,flaredUntil:0})
+    if(halloween)pumpkin(this.sprite(226,200,'pumpkin-glow',205),true)
     this.jukebox=this.sprite(JUKEBOX.x,JUKEBOX.y,'jukebox-idle',JUKEBOX.depth)
     // Three reused notes; they show only while this visitor is listening.
     this.jukeboxNotes=[0,1,2].map(()=>this.sprite(JUKEBOX.x,JUKEBOX.y,'music-note',640).setVisible(false))
@@ -209,6 +225,11 @@ class StoreScene extends Phaser.Scene {
     this.fixerDust=this.add.graphics().setDepth(this.fixer.depth+1)
     this.sprite(180,564,'entrance',1000)
     this.text(180,559,'ENTRANCE',8,'#5e3d27',1001)
+    // A few Halloween touches: pumpkins either side of the door and two bats by the sign.
+    if(halloween){
+      pumpkin(floor(104,536,'pumpkin-glow'),true);pumpkin(floor(256,536,'pumpkin'),false)
+      this.bats=([[34,46,1],[330,44,-1]] as const).map(([x,y,inward])=>({sprite:this.sprite(x,y,'bat-up',3),x,y,inward,flyingSince:-Infinity}))
+    }
     const chef=this.sprite(98,160,'chef',100)
     this.cookingEffects=this.add.graphics().setDepth(101)
     this.updateChefCooking()
@@ -261,6 +282,11 @@ class StoreScene extends Phaser.Scene {
       if(tappedCat){this.tapFeedback(x,y);const result=this.petCat(tappedCat.name);if(result!=='petted')this.meow(tappedCat.name);return}
       // Tapping the handyman makes him stop work and apologise for the renovation.
       if(this.fixer&&Math.abs(x-this.fixer.x)<26&&Math.abs(y-this.fixer.y)<26){this.tapFeedback(x,y);this.fixerSpeak();return}
+      // Halloween decorations react on the spot, before the counter and board areas behind them.
+      const tappedPumpkin=this.pumpkins.find(({sprite})=>Math.abs(x-sprite.x)<18&&Math.abs(y-sprite.y)<16)
+      if(tappedPumpkin){this.tapFeedback(x,y);this.tapPumpkin(tappedPumpkin);return}
+      const tappedBat=this.bats.find(({sprite})=>Math.abs(x-sprite.x)<20&&Math.abs(y-sprite.y)<14)
+      if(tappedBat){this.tapFeedback(x,y);this.tapBat(tappedBat);return}
       const interact=(tx:number,ty:number,kind:string)=>{this.tapFeedback(x,y);this.walkTo(tx,ty,()=>this.opts.onInteract(kind))}
       if(this.jukebox&&Math.abs(x-this.jukebox.x)<28&&y>=this.jukebox.y-34&&y<=this.jukebox.y+36){interact(JUKEBOX.standX,JUKEBOX.standY,'jukebox');return}
       if(x>=192&&y<200){interact(220,260,'board');return}
@@ -289,6 +315,11 @@ class StoreScene extends Phaser.Scene {
     this.texture('feedback-board',art.feedbackBoardArt());this.texture('entrance',art.entranceArt())
     this.texture('jukebox-idle',art.jukeboxArt('idle'));for(const frame of [0,1,2,3] as const)this.texture(`jukebox-${frame}`,art.jukeboxArt(frame))
     this.texture('music-note',art.musicNoteArt())
+    if(isHalloweenSeason()){
+      this.texture('pumpkin',art.pumpkinArt());this.texture('pumpkin-glow',art.pumpkinArt('glow'));this.texture('pumpkin-flicker',art.pumpkinArt('flicker'));this.texture('pumpkin-bright',art.pumpkinArt('bright'))
+      this.texture('bat-up',art.batArt('up'));this.texture('bat-down',art.batArt('down'))
+      this.texture('ghost',art.ghostArt());this.texture('candy',art.candyArt())
+    }
     for(const reaction of reactionOptions){
       const pixels=new art.PixelArt(20,20)
       pixels.rect(0,1,20,18,'#674731').rect(1,0,18,20,'#674731').rect(1,1,18,18,'#fff3da')
@@ -554,10 +585,77 @@ class StoreScene extends Phaser.Scene {
         .setAlpha(progress<.15?progress/.15:Math.max(0,1-(progress-.15)/.85)).setVisible(true)
     })
   }
+  // Candles flicker now and then and the bats flap with a one-pixel bob; still under reduced motion.
+  // A tapped pumpkin hops, and a tapped bat swoops down in a loop and back to its spot.
+  private updateHalloween(){
+    const now=this.time.now,motion=!this.opts.reducedMotion
+    this.pumpkins.forEach((pumpkin,i)=>{
+      if(pumpkin.carved){
+        const texture=now<pumpkin.flaredUntil?'pumpkin-bright':motion&&(now+i*1700)%2300<180?'pumpkin-flicker':'pumpkin-glow'
+        if(pumpkin.sprite.texture.key!==texture)pumpkin.sprite.setTexture(texture)
+      }
+      const hop=(now-pumpkin.tappedAt)/260,y=pumpkin.y-(motion&&hop<1?Math.round(Math.sin(hop*Math.PI)*3)*PX:0)
+      if(pumpkin.sprite.y!==y)pumpkin.sprite.setY(y)
+    })
+    this.bats.forEach((bat,i)=>{
+      const flight=motion?(now-bat.flyingSince)/2400:1
+      let x=bat.x,y=bat.y+(motion&&Math.floor((now+i*700)/1400)%2?PX:0)
+      if(flight<1){
+        // Out toward the middle dipping low, back along the top: a loop that stays inside the room.
+        x=bat.x+bat.inward*Math.round(Math.sin(flight*Math.PI)*24)*PX
+        const swoop=Math.sin(flight*Math.PI*2)
+        y=bat.y+Math.round(swoop*(swoop>0?22:9))*PX
+      }
+      const up=!motion||Math.floor((now+i*170)/(flight<1?120:260))%2===0
+      if(bat.sprite.texture.key!==(up?'bat-up':'bat-down'))bat.sprite.setTexture(up?'bat-up':'bat-down')
+      if(bat.sprite.x!==x||bat.sprite.y!==y)bat.sprite.setPosition(x,y)
+      setDepthIfChanged(bat.sprite,flight<1?640:3)
+    })
+  }
+  private tapPumpkin(pumpkin:typeof this.pumpkins[number]){
+    const now=this.time.now
+    // One ghost or candy per hop, so quick repeated taps don't pile them up.
+    if(now-pumpkin.tappedAt<900)return
+    pumpkin.tappedAt=now
+    if(pumpkin.carved)pumpkin.flaredUntil=now+900
+    const bubble=this.decorSpeak(pumpkin.sprite.x,pumpkin.y-18,pumpkin.carved?HALLOWEEN_LINES.carved:HALLOWEEN_LINES.plain)
+    if(this.opts.reducedMotion)return
+    const {x}=pumpkin.sprite,y=pumpkin.y,depth=pumpkin.sprite.depth+1
+    if(pumpkin.carved){
+      // The ghost rises in whole pixels with a slow sway, then fades. It's the one saying "Boo!",
+      // so the bubble rides just above it instead of covering it.
+      const ghost=this.sprite(x,y-8,'ghost',depth).setAlpha(0),progress={value:0}
+      this.tweens.add({targets:progress,value:1,duration:1600,onUpdate:()=>{
+        const p=progress.value
+        ghost.setPosition(x+Math.round(Math.sin(p*Math.PI*3)*2)*PX,y-8-Math.round(p*18)*PX).setAlpha(p<.15?p/.15*.9:.9*(1-(p-.15)/.85))
+        if(this.decorBubble===bubble)bubble.setPosition(ghost.x,ghost.y-ghost.displayHeight/2-2)
+      },onComplete:()=>ghost.destroy()})
+    }else{
+      // The candy pops out in an arc, lands on the floor beside the pumpkin and fades.
+      const side=Math.random()<.5?-1:1,candy=this.sprite(x,y,'candy',depth),progress={value:0}
+      this.tweens.add({targets:progress,value:1,duration:520,onUpdate:()=>{
+        const p=progress.value
+        candy.setPosition(x+side*Math.round(p*12)*PX,y-Math.round(Math.sin(p*Math.PI)*14-p*5)*PX)
+      },onComplete:()=>this.tweens.add({targets:candy,alpha:0,delay:900,duration:400,onComplete:()=>candy.destroy()})})
+    }
+  }
+  private tapBat(bat:typeof this.bats[number]){
+    this.decorSpeak(bat.sprite.x,bat.sprite.y-10,HALLOWEEN_LINES.bat)
+    if(this.time.now-bat.flyingSince>=2400)bat.flyingSince=this.time.now
+  }
+  private decorSpeak(x:number,y:number,lines:string[]){
+    this.decorBubbleTimer?.remove(false)
+    this.decorBubble?.destroy()
+    const bubble=this.tag(x,y,lines[Math.floor(Math.random()*lines.length)]!).setDepth(900)
+    this.decorBubble=bubble
+    this.decorBubbleTimer=this.time.delayedCall(1800,()=>{if(this.decorBubble===bubble)this.decorBubble=undefined;bubble.destroy();this.decorBubbleTimer=undefined})
+    return bubble
+  }
   override update(_:number,delta:number){
     this.updateMascot(delta)
     this.updateFixer()
     this.updateJukebox()
+    this.updateHalloween()
     for(const character of this.staff)this.animateCharacter(character,false)
     this.updateChefCooking()
     for(const character of this.remotes.values())this.animateCharacter(character,this.time.now<character.movingUntil)

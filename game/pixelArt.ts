@@ -406,6 +406,39 @@ export function musicNoteArt(){
   return new PixelArt(8,9).grid(1,1,['...cc.','...c.c','...c..','...c..','.ccc..','cccc..','.cc...'],{c:'#fff3d6'}).outline('#6b4630')
 }
 
+// ---------- Halloween ----------
+// Shown only in the Halloween season (see isHalloweenSeason). A ribbed pumpkin, optionally carved;
+// the carved one has two glow frames so the candle can flicker, and a bright one for when it's tapped.
+const PUMPKIN='#e8843c',PUMPKIN_DARK='#c4622a',PUMPKIN_LIGHT='#f7a65c',STEM='#6b7d3a'
+export function pumpkinArt(face:'none'|'glow'|'flicker'|'bright'='none'){
+  const art=new PixelArt(16,14)
+  art.ellipse(8,8.5,7.5,4.8,PUMPKIN)
+  for(const [x,y] of [[5,5],[5,6],[4,7],[4,8],[4,9],[4,10],[5,11],[5,12]] as const)art.set(x,y,PUMPKIN_DARK).set(15-x,y,PUMPKIN_DARK)
+  art.set(2,7,PUMPKIN_LIGHT).set(2,8,PUMPKIN_LIGHT).set(7,5,PUMPKIN_LIGHT)
+  art.rect(7,2,2,3,STEM).set(7,2,'#8aa04a').set(9,2,LEAF).set(10,3,LEAF)
+  if(face!=='none'){
+    const glow=face==='glow'?'#ffd45e':face==='bright'?'#fff1a8':'#ffb347',core=face==='bright'?'#ffffff':'#fff1a8'
+    art.grid(0,6,['.....y....y.....','....yyy..yyy....','.......yy.......','...yyyyyyyyyy...','....yy.yy.yy....'],{y:glow})
+    art.set(5,7,core).set(10,7,core)
+  }
+  return art.outline(INK).shadow(8,13.4,7,1)
+}
+// A little bat; 'up' and 'down' are the two wing beats.
+export function batArt(wings:'up'|'down'){
+  const rows=wings==='up'
+    ?['w.....b.b.....w','ww....bbb....ww','www..bybyb..www','wwwwwbbbbbwwwww','.w.w.wbbbw.w.w.','.......b.......']
+    :['......b.b......','......bbb......','.wwwwbybybwwww.','wwwwwbbbbbwwwww','ww...wbbbw...ww','w......b......w']
+  return new PixelArt(17,8).grid(1,1,rows,{b:'#2e2433',w:'#4b3a5a',y:'#ffd45e'}).outline('#1d1620')
+}
+
+// The little ghost that floats out of a tapped jack-o'-lantern, and the candy the plain pumpkin gives.
+export function ghostArt(){
+  return new PixelArt(12,11).grid(1,1,['..wwwwww..','.wwwwwwws.','wwkwwwwkws','wwkwwwwkws','wpwwkkwwps','wwwwwwwwws','wwwwwwwwws','w.ww..ww.s'],{w:'#fbf7f0',s:'#e3dbe6',k:EYE,p:BLUSH}).outline('#6b5a72')
+}
+export function candyArt(){
+  return new PixelArt(11,5).grid(1,1,['e..ccc..e','eeccCccee','e..ccc..e'],{e:'#e8843c',c:'#8b5cc4',C:'#bd95ea'}).outline(INK)
+}
+
 export function sparkleArt(){return new PixelArt(7,7).grid(0,0,['...c...','...c...','..ccc..','ccccccc','..ccc..','...c...','...c...'],{c:'#fff1cf'})}
 
 // ---------- The room shell (walls, awning, sign, kitchen nook, chalkboard frame, floor) ----------

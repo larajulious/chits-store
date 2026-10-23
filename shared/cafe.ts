@@ -1,3 +1,5 @@
+import {vendingProducts} from './world'
+
 // Kape & Chits: the 24/7 coffee tambayan next to the store. Every drink is virtual and free; nothing is ordered or paid.
 // Shared by the barista dialog, the server's drink check and the Phaser cups.
 export type DrinkId='iced-coffee'|'hot-latte'|'cappuccino'|'hot-chocolate'
@@ -9,9 +11,17 @@ export const drinkOptions:readonly Drink[]=[
   {id:'hot-chocolate',label:'Hot Chocolate',line:'Tsokolate with marshmallows!'},
 ]
 export function isDrink(value:unknown):value is DrinkId{return typeof value==='string'&&drinkOptions.some(drink=>drink.id===value)}
+// Anything a visitor can carry: a café drink, or a cold can from the street's vending machine. It stays in their hand
+// wherever they go (and across reconnects) until they throw it in a garbage bin; one at a time.
+export type ColdCanId=string
+export type HeldDrink=DrinkId|ColdCanId
+export function isColdCan(value:unknown):value is ColdCanId{return typeof value==='string'&&vendingProducts.some(product=>product.id===value&&!product.soon)}
+export function isHeldDrink(value:unknown):value is HeldDrink{return isDrink(value)||isColdCan(value)}
+export const HOLDING_ALREADY='Itapon mo muna sa basurahan ang hawak mo.'
 export const BARISTA_GREETING='Welcome sa Kape & Chits! Anong kape natin today?'
 
-// Small animations a visitor can play for everyone in the café. Wave and laugh travel as the existing emotes.
+// Small animations a visitor can play for everyone around them: sip (anywhere, with a drink in hand) and relax (in the
+// café). Wave and laugh travel as the existing emotes.
 export type CafeAction='sip'|'relax'
 export function isCafeAction(value:unknown):value is CafeAction{return value==='sip'||value==='relax'}
 

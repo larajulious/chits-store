@@ -11,7 +11,8 @@ import type {CatName,CatTaps} from '../../shared/store-mascot'
 import {canSetVolume,createJukeboxPlayer,readJukeboxPrefs,saveJukeboxPrefs,type JukeboxListenStatus,type JukeboxPlayer} from '../utils/jukeboxPlayer'
 import {isScene,scenes,type Pose,type SceneId} from '../../shared/world'
 import {clearVisitScene,readVisitScene,saveVisitScene} from '../utils/visitScene'
-import {isCafeAction,isCafeMood,isDrink,type CafeAction,type CafeJukeboxState,type CafeJukeboxVote,type CafeMood,type DrinkId} from '../../shared/cafe'
+import {HOLDING_ALREADY,isCafeAction,isCafeMood,isHeldDrink,type CafeAction,type CafeJukeboxState,type CafeJukeboxVote,type CafeMood,type DrinkId,type HeldDrink} from '../../shared/cafe'
+import {type VendingProduct} from '../../shared/world'
 import {createCafeMusic,readCafeVolume,type CafeMusic,type CafeMusicStatus} from '../utils/cafeMusic'
 import {SKY_PREVIEW} from '../../game/scenery'
 const route=useRoute()
@@ -69,9 +70,10 @@ const jukeboxScene=computed(()=>({playing:Boolean(jukebox.value?.enabled&&jukebo
 let musicPlayer:JukeboxPlayer|undefined,pingSentAt=0
 let jukeboxClockTimer:ReturnType<typeof setInterval>|undefined,jukeboxVoteTimeout:ReturnType<typeof setTimeout>|undefined
 const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean|undefined;exitScene:(target?:SceneId)=>Promise<void>;cancelExit:()=>void;setPose:(id:string,pose:Pose,seat?:number)=>void;vend:()=>void;goInside:()=>void;goToCafe:()=>void;
-  setDrink:(id:string,drink:DrinkId|null)=>void;playAction:(id:string,action:CafeAction)=>void;orderDrink:(drink:DrinkId,surprise?:boolean)=>void;cafeAct:(action:CafeAction)=>void;standUp:()=>void;enjoyView:()=>void}|null>(null)
+  setDrink:(id:string,drink:HeldDrink|null)=>void;playAction:(id:string,action:CafeAction)=>void;sip:()=>boolean;orderDrink:(drink:DrinkId,surprise?:boolean)=>void;cafeAct:(action:CafeAction)=>void;standUp:()=>void;enjoyView:()=>void}|null>(null)
 // Kape & Chits: this visitor's seat and cup (for the action bar), and their own café music, which nobody else hears.
-const selfSeated=ref(false),selfDrink=ref<DrinkId|null>(null)
+// selfDrink: what this visitor holds (a café cup or a cold can), wherever they are, until they throw it in a bin.
+const selfSeated=ref(false),selfDrink=ref<HeldDrink|null>(null)
 // How many are in Kape & Chits, for the sign outside; the server sends the count to the street only.
 const cafeInside=ref(0)
 // The café's shared music timeline (the mood also sets the café's weather: rain for the rainy mood), this visitor's
@@ -357,7 +359,12 @@ function connect(){
       syncSelf()
       if(sceneWait)sceneWait(true);else if(data.scene!==scene.value)enterScene(data.scene)
     }
-    if(data.type==='scene_rejected'){if(isScene(data.scene))serverScene.value=data.scene;if(data.reason==='closed'){storeOpen.value=false;notice.value=closedNotice}sceneWait?.(false)}
+    if(data.type==='scene_rejected'){
+      if(isScene(data.scene))serverScene.value=data.scene
+      if(data.reason==='closed'){storeOpen.value=false;notice.value=closedNotice}
+      else if(data.reason in jeepneyRejections)notice.value=jeepneyRejections[data.reason]!
+      sceneWait?.(false)
+    }
     // Staff opened or closed the store. Closing also walks anyone inside out to the street (a scene_changed).
     if(data.type==='store_status'&&typeof data.open==='boolean'&&data.open!==storeOpen.value){
       storeOpen.value=data.open
@@ -377,7 +384,9 @@ function connect(){
       if(found){Object.assign(toRaw(found),{pose,seat});game.value?.setPose(data.id,pose,seat)}
     }
     if(data.type==='sit_rejected'){selfSeated.value=false;game.value?.setPose(selfId.value,'stand')}
-    if(data.type==='player_drink'&&(isDrink(data.drink)||data.drink===null)){
+    if(data.type==='drink_rejected')notice.value=HOLDING_ALREADY
+    if(data.type==='trash_rejected')notice.value='Lumapit ka muna sa basurahan.'
+    if(data.type==='player_drink'&&(isHeldDrink(data.drink)||data.drink===null)){
       const found=players.value.find(p=>p.id===data.id)
       if(found)Object.assign(toRaw(found),{drink:data.drink??undefined})
       if(data.id===selfId.value)selfDrink.value=data.drink
@@ -443,6 +452,8 @@ function connect(){
 function send(data:object){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(data))}
 function sendChat(){const text=message.value.trim();if(!connected.value||!text||text.length>160||!chatEnabled.value)return;send({type:'chat',text});message.value=''}
 function openChat(){chatTab.value='community';overlay.value='chat'}
+// Why a jeepney wouldn't take this visitor (see changeScene on the server).
+const jeepneyRejections:Record<string,string>={no_jeepney:'Wala nang jeep sa stop. Hintay lang sa susunod!',too_far:'Lapit ka muna sa likod ng jeep.',full:'Puno na ang jeep! Sa susunod na lang.'}
 // A new name shows at once in the header; the room's player lists bring it to everyone's name tags.
 function onRenamed(result:{nickname:string;name:string}){if(me.value)me.value={...me.value,...result};overlay.value='';notice.value=`You're now ${result.nickname}.`}
 // Community chat opens at the newest line and follows new ones, unless the visitor has scrolled up to read
@@ -463,18 +474,23 @@ function muteSpeaker(nickname:string){mutedNames.value=new Set([...mutedNames.va
 function unmuteAll(){mutedNames.value=new Set()}
 function reportLine(messageId:string){chatMenuFor.value='';if(!reportedIds.value.has(messageId))send({type:'report',messageId})}
 // Barista: the cup is made in the scene (brew, serve, hand over); the server then shares it with the café.
-function chooseDrink(drink:DrinkId,surprise:boolean){overlay.value='';game.value?.orderDrink(drink,surprise)}
+// One drink at a time: the barista and the vending machine both ask for the bin first.
+function chooseDrink(drink:DrinkId,surprise:boolean){overlay.value='';if(selfDrink.value){notice.value=HOLDING_ALREADY;return}game.value?.orderDrink(drink,surprise)}
 function onDrink(drink:DrinkId){selfDrink.value=drink;send({type:'drink',drink})}
-// Sip and relax are café actions. Reactions stay in Emotes; in the café a wave or laugh also moves the avatar.
+function onVend(product:VendingProduct){if(selfDrink.value)return;game.value?.vend();selfDrink.value=product.id;send({type:'drink',drink:product.id})}
+// Tapping a bin walks there; then the drink goes in (the server checks the visitor is by it).
+function throwAway(){if(!selfDrink.value){notice.value='Wala kang hawak na itatapon.';return}send({type:'trash'})}
+// Sip works anywhere with a drink in hand; relax is the café's. Reactions stay in Emotes (in the café a wave or laugh
+// also moves the avatar).
 function cafeAction(action:CafeAction){
   const now=Date.now()
   if(now-lastCafeAct<800)return
   lastCafeAct=now
-  game.value?.cafeAct(action)
+  if(action==='sip')game.value?.sip();else game.value?.cafeAct(action)
 }
 function onCafeAct(action:CafeAction){send({type:'act',action})}
 // The visitor's own seat and drink as the server has them, after a welcome or a scene change.
-function syncSelf(){const own=players.value.find(p=>p.id===selfId.value);selfSeated.value=own?.pose==='sit';selfDrink.value=isDrink(own?.drink)?own.drink:null}
+function syncSelf(){const own=players.value.find(p=>p.id===selfId.value);selfSeated.value=own?.pose==='sit';selfDrink.value=isHeldDrink(own?.drink)?own.drink:null}
 // From the app-development sign: a ready-made inquiry the visitor can edit before sending,
 // with the cursor after it so anything they type is added to the end.
 async function askAboutServices(){
@@ -494,6 +510,7 @@ function interact(kind:string){
   if(isScene(kind)){void changeScene(kind);return}
   if(!storeOpen.value&&STORE_PANELS.has(kind)){notice.value=closedNotice;return}
   if(kind==='leave'){leaveDialog.value?.open();return}
+  if(kind==='trash'){throwAway();return}
   if(kind==='cafe-jukebox')cafeVolume.value=cafeMusic?.volume??readCafeVolume()
   overlay.value=kind;if(kind==='menu')void loadMenu()
 }
@@ -514,13 +531,13 @@ async function changeScene(target:SceneId){
   const opened=Promise.race([game.value?.exitScene(target)??Promise.resolve(),new Promise(resolve=>setTimeout(resolve,1500))])
   const [ok]=await Promise.all([confirmed,opened])
   if(!alive||returningHome.value)return
-  if(!ok){transitionPlayers=[];game.value?.cancelExit();transitioning.value=false;if(connected.value&&storeOpen.value)notice.value='The door is stuck. Please try again.';return}
+  if(!ok){transitionPlayers=[];game.value?.cancelExit();transitioning.value=false;if(connected.value&&storeOpen.value&&target!=='jeepney')notice.value='The door is stuck. Please try again.';return}
   enterScene(target)
 }
 function enterScene(target:SceneId){
-  // Seats and cups stay behind; the café's music hands back to the store's jukebox (see routeMusic).
+  // Seats stay behind (drinks come along); the café's music hands back to the store's jukebox (see routeMusic).
   if(target!=='cafe')cafeJukebox.value=null
-  selfSeated.value=false;selfDrink.value=null
+  selfSeated.value=false
   transitionPlayers=[];scene.value=target;saveVisitScene(target)
   transitioning.value=true
   clearTimeout(sceneReadyTimer);sceneReadyTimer=setTimeout(()=>{transitioning.value=false},8000)
@@ -536,7 +553,7 @@ async function leave(){
 </script>
 <template><main ref="shell" class="game-shell structured-store" :class="{'is-fullscreen':fullscreen}">
   <header class="structured-store-top">
-    <button type="button" class="visitor-identity" :aria-label="`${me?.nickname||'Guest'}. Change your name`" :disabled="!me" @click="overlay='nickname'"><span class="visitor-portrait"><PixelSprite :name="`head-${visitorAvatar}`" :scale="2"/></span><span class="visitor-copy"><span>{{ scene==='outside'?'NEIGHBORHOOD':scene==='cafe'?'KAPE & CHITS':'CHITS STORE' }}</span><strong :title="me?.nickname">{{ me?.nickname || 'Guest' }}<StoreGlyph name="pencil"/></strong></span></button>
+    <button type="button" class="visitor-identity" :aria-label="`${me?.nickname||'Guest'}. Change your name`" :disabled="!me" @click="overlay='nickname'"><span class="visitor-portrait"><PixelSprite :name="`head-${visitorAvatar}`" :scale="2"/></span><span class="visitor-copy"><span>{{ scene==='outside'?'NEIGHBORHOOD':scene==='cafe'?'KAPE & CHITS':scene==='jeepney'?'JEEPNEY RIDE':'CHITS STORE' }}</span><strong :title="me?.nickname">{{ me?.nickname || 'Guest' }}<StoreGlyph name="pencil"/></strong></span></button>
     <button v-if="fullscreenSupported" type="button" class="fullscreen-toggle" :aria-label="fullscreen?'Exit fullscreen':'Play fullscreen'" :aria-pressed="fullscreen" :title="fullscreen?'Exit fullscreen (Esc)':'Fullscreen'" @click="toggleFullscreen"><StoreGlyph :name="fullscreen?'collapse':'expand'"/></button>
     <div class="visit-status">
       <span class="connection-pill" :class="{ready:connected}" role="status"><span class="connection-dot" aria-hidden="true"/>{{ connected?`${online} online`:'Connecting' }}</span>
@@ -557,7 +574,7 @@ async function leave(){
       <button v-if="storeOpen" type="button" @click="interact('feedback')"><StoreGlyph name="pencil"/><span>Feedback</span></button>
       <button type="button" @click="leaveDialog?.open()"><StoreGlyph name="door"/><span>Leave</span></button>
     </nav>
-    <div v-if="scene==='outside'" class="structured-hint"><p class="cat-hint-copy"><span>{{ storeOpen?'Sit on the bench · kape next door':'Store closed · Kape & Chits is open 24/7' }}</span></p><button type="button" class="cat-action go-cafe" aria-label="Walk into Kape & Chits, the 24/7 coffee shop" :disabled="!!overlay||transitioning" @click="game?.goToCafe()"><StoreGlyph name="cup"/>Café</button><button type="button" class="cat-action go-inside" :aria-label="storeOpen?'Walk back into Chits Store':'Chits Store is closed'" :disabled="!!overlay||transitioning||!storeOpen" @click="game?.goInside()"><StoreGlyph name="door"/>{{ storeOpen?'Store':'Closed' }}</button></div>
+    <div v-if="scene==='outside'" class="structured-hint"><p class="cat-hint-copy"><span>{{ selfDrink?'Done? Bin by the bench':storeOpen?'Sit on the bench · kape next door':'Store closed · Kape & Chits is open 24/7' }}</span></p><button v-if="selfDrink" type="button" class="cat-action sip-act" aria-label="Take a sip of your drink" :disabled="!!overlay" @click="cafeAction('sip')"><PixelSprite :name="`cup-${selfDrink}`" :scale="2"/>Sip</button><button type="button" class="cat-action go-cafe" aria-label="Walk into Kape & Chits, the 24/7 coffee shop" :disabled="!!overlay||transitioning" @click="game?.goToCafe()"><StoreGlyph name="cup"/>Café</button><button type="button" class="cat-action go-inside" :aria-label="storeOpen?'Walk back into Chits Store':'Chits Store is closed'" :disabled="!!overlay||transitioning||!storeOpen" @click="game?.goInside()"><StoreGlyph name="door"/>{{ storeOpen?'Store':'Closed' }}</button></div>
     <div v-else-if="scene==='cafe'" class="structured-hint cafe-hint">
       <p class="cat-hint-copy cafe-count" role="status" :aria-label="`${cafeCount} in the café`"><StoreGlyph name="people"/><strong>{{ cafeCount }}</strong><span>in the café · tap a seat</span></p>
       <div class="cafe-acts" role="group" aria-label="Café actions">
@@ -567,12 +584,14 @@ async function leave(){
         <button v-if="selfSeated" type="button" class="cafe-act stand-up" :disabled="!!overlay" @click="game?.standUp()"><span class="cafe-act-glyph" aria-hidden="true">↑</span>Stand</button>
       </div>
     </div>
-    <div v-else-if="catEnabled" class="structured-hint"><p class="cat-hint-copy"><span class="cat-hint-faces"><PixelSprite name="cat-face" :scale="2"/><PixelSprite name="onay-face" :scale="2"/></span><span>Drag yarn · tap Miming or Onay to pet</span></p><button type="button" class="cat-action toss-yarn" aria-label="Toss yarn for Miming and Onay, the shop cats" :disabled="!!overlay" @click="game?.tossYarn()"><StoreGlyph name="yarn"/>Toss yarn</button></div>
+    <div v-else-if="scene==='jeepney'" class="structured-hint"><p class="cat-hint-copy"><span>Enjoy the ride · Para po! to get off at Chits Store</span></p><button v-if="selfDrink" type="button" class="cat-action sip-act" aria-label="Take a sip of your drink" :disabled="!!overlay" @click="cafeAction('sip')"><PixelSprite :name="`cup-${selfDrink}`" :scale="2"/>Sip</button><button type="button" class="cat-action para-act" aria-label="Para po! Get off in front of Chits Store" :disabled="!!overlay||transitioning" @click="changeScene('outside')"><StoreGlyph name="door"/>Para po!</button></div>
+    <div v-else-if="catEnabled" class="structured-hint"><p class="cat-hint-copy"><span class="cat-hint-faces"><PixelSprite name="cat-face" :scale="2"/><PixelSprite name="onay-face" :scale="2"/></span><span>Drag yarn · tap Miming or Onay to pet</span></p><button v-if="selfDrink" type="button" class="cat-action sip-act" aria-label="Take a sip of your drink" :disabled="!!overlay" @click="cafeAction('sip')"><PixelSprite :name="`cup-${selfDrink}`" :scale="2"/>Sip</button><button v-if="selfSeated" type="button" class="cat-action stand-act" :disabled="!!overlay" @click="game?.standUp()"><span class="cafe-act-glyph" aria-hidden="true">↑</span>Stand</button><button v-else type="button" class="cat-action view-act" aria-label="Enjoy the view: walk out to the deck's railing" :disabled="!!overlay" @click="game?.enjoyView()"><StoreGlyph name="view"/>View</button><button type="button" class="cat-action toss-yarn" aria-label="Toss yarn for Miming and Onay, the shop cats" :disabled="!!overlay" @click="game?.tossYarn()"><StoreGlyph name="yarn"/>Toss yarn</button></div>
+    <div v-else class="structured-hint"><p class="cat-hint-copy"><span>The view deck is through the side door</span></p><button v-if="selfDrink" type="button" class="cat-action sip-act" aria-label="Take a sip of your drink" :disabled="!!overlay" @click="cafeAction('sip')"><PixelSprite :name="`cup-${selfDrink}`" :scale="2"/>Sip</button><button v-if="selfSeated" type="button" class="cat-action stand-act" :disabled="!!overlay" @click="game?.standUp()"><span class="cafe-act-glyph" aria-hidden="true">↑</span>Stand</button><button v-else type="button" class="cat-action view-act" aria-label="Enjoy the view: walk out to the deck's railing" :disabled="!!overlay" @click="game?.enjoyView()"><StoreGlyph name="view"/>View</button></div>
     <div v-if="overlay" class="overlay-shade" :class="{'chat-overlay':overlay==='chat'||overlay==='jukebox'}" @click.self="overlay=''">
       <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback','chat-dialog':overlay==='chat','jukebox-dialog':overlay==='jukebox','order-chat-dialog':overlay==='chat'&&chatTab==='orders'&&!!selectedOrderId}" role="dialog" aria-labelledby="store-dialog-title">
         <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ overlay==='chat'?(chatTab==='orders'?'Order inbox':'Community chat'):{menu:"Today's Menu",board:'Live Order Board',cashier:'Staff',chef:'Chef',emotes:'Reactions',feedback:'Feedback box',jukebox:'Jukebox',services:'App development',vending:'Vending machine',barista:'Barista','cafe-board':'Chika board','cafe-jukebox':'Café jukebox',nickname:'Your name'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
         <FeedbackBox v-if="overlay==='feedback'" ref="feedbackBox"/>
-        <VendingPanel v-if="overlay==='vending'" :menu-available="storeOpen" @vend="game?.vend()" @menu="interact('menu')"/>
+        <VendingPanel v-if="overlay==='vending'" :menu-available="storeOpen" :holding="selfDrink" @vend="onVend" @menu="interact('menu')"/>
         <NicknamePanel v-if="overlay==='nickname'&&me" :name="me.name??''" :nickname="me.nickname" :avatar="me.avatar" @saved="onRenamed"/>
         <CafeBaristaPanel v-if="overlay==='barista'" :holding="selfDrink" @choose="chooseDrink"/>
         <CafeBoardPanel v-if="overlay==='cafe-board'" @use="useStarter"/>
@@ -678,6 +697,12 @@ async function leave(){
 button.visitor-identity{padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}button.visitor-identity:disabled{opacity:1;cursor:default}
 .visitor-identity .visitor-copy>strong{display:flex;align-items:center;gap:6px}.visitor-copy>strong svg{flex-shrink:0;width:13px;height:13px;color:#a8835f}
 button.visitor-identity:focus-visible{outline:3px solid #617e4d;outline-offset:3px;border-radius:6px}
+/* Riding a jeepney: Para po! gets off. */
+.para-act{--shade:#c9a06c;border-color:#a8432f;background:#ffe3dc;color:#7a2a24}
+/* The store's deck: View walks out to the railing; Stand gets up from a bench or the railing. */
+.view-act,.stand-act{--shade:#b5d4a0;border-color:#91aa6f;background:#e6f2da;color:#3d7a34}.stand-act .cafe-act-glyph{height:auto;font-size:13px}
+/* A drink in hand: the Sip button on the street and in the store shows what you're holding. */
+.sip-act{--shade:#c9a06c;border-color:#8a6446;background:#f6e3c4;color:#5e3d27}.sip-act .pixel-sprite{width:auto;height:18px}
 /* Kape & Chits: the café button on the street, the in-café action bar, and per-line chat options. */
 .go-cafe{--shade:#c9a06c;border-color:#8a6446;background:#f6e3c4;color:#5e3d27}
 .cafe-hint{align-items:center}

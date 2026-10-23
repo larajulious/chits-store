@@ -1,8 +1,9 @@
 import { activeVisitor, getVisitor, publicOrder, type OrderRow } from './db'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, AdminChatState } from '../../shared/chat'
-import { arrivalSpot, CAFE_RESTROOM_SEAT, RESTROOM_MS, sceneLinked, sceneSeats, SEAT_REACH, type Pose, type SceneId } from '../../shared/world'
-import type { CafeAction, DrinkId } from '../../shared/cafe'
+import { arrivalSpot, CAFE_RESTROOM_SEAT, jeepneySeats, nearBin, RESTROOM_MS, sceneLinked, sceneSeats, SEAT_REACH, type Pose, type SceneId } from '../../shared/world'
+import { JEEPNEY_STOP, jeepneyAtStop } from '../../shared/traffic'
+import { isColdCan, type CafeAction, type HeldDrink } from '../../shared/cafe'
 import { isStoreOpen } from './store'
 
 type Connection = {
@@ -17,8 +18,8 @@ type Connection = {
   y: number
   pose: Pose
   seat: number|null
-  // The virtual café drink in hand; only ever held inside Kape & Chits.
-  drink: DrinkId|null
+  // The drink in hand (a café cup or a cold can), carried everywhere until thrown in a bin.
+  drink: HeldDrink|null
   lastDrink: number
   lastAct: number
   lastSceneChange: number
@@ -40,6 +41,8 @@ const chatHistory:ChatMessage[]=[]
 // Visitors who reported each message (by visitor ID, so one report each). Only staff see the counts.
 const chatReports=new Map<string,Set<number>>()
 const reportPace=new Map<number,{windowStart:number;count:number}>()
+// Drinks in hand by visitor ID, so a refresh or reconnect keeps them. Only a bin (trashDrink) lets one go.
+const heldDrinks=new Map<number,HeldDrink>()
 export function publishChat(message:Omit<ChatMessage,'messageId'>){
   const entry={...message,messageId:randomUUID()}
   chatHistory.push(entry)
@@ -132,6 +135,8 @@ export function joinRoom(p: Connection) {
   if (members.size >= 40) { p.send(serialize({type:'room_full'})); p.close(); return }
   const previous=interactions.get(p.visitorId)
   if(previous)Object.assign(p,previous)
+  // A refresh or reconnect keeps the drink in hand.
+  p.drink=heldDrinks.get(p.visitorId)??null
   members.set(p.id, p)
   p.send(serialize({ type:'welcome', selfId:p.id, scene:p.scene, players:playerList(p.scene), online:members.size, chatEnabled, storeOpen:isStoreOpen() }))
   broadcastPresence()
@@ -149,14 +154,24 @@ export function changeScene(p:Connection,scene:SceneId){
   if(scene!==p.scene&&!sceneLinked(p.scene,scene)){p.send(serialize({type:'scene_rejected',scene:p.scene}));return false}
   if(scene==='store'&&!isStoreOpen()){p.send(serialize({type:'scene_rejected',scene:p.scene,reason:'closed'}));return false}
   if(now-p.lastSceneChange<800){p.send(serialize({type:'scene_rejected',scene:p.scene}));return false}
+  // Boarding a jeepney: only one waiting at the stop, only from beside its rear door, only with a seat free.
+  if(scene==='jeepney'&&p.scene!=='jeepney'){
+    const reason=!jeepneyAtStop(now,1500)?'no_jeepney':Math.hypot(p.x-JEEPNEY_STOP.boardX,p.y-JEEPNEY_STOP.boardY)>JEEPNEY_STOP.reach?'too_far':!freeJeepneySeat()?'full':undefined
+    if(reason){p.send(serialize({type:'scene_rejected',scene:p.scene,reason}));return false}
+  }
   placeInScene(p,scene,now)
   broadcastPresence()
   return true
 }
+// The first jeepney seat nobody (else) is sitting on.
+function freeJeepneySeat(self?:Connection){
+  const taken=[...members.values()].filter(member=>member!==self&&member.scene==='jeepney')
+  return jeepneySeats.find(seat=>!taken.some(member=>member.x===seat.x&&member.y===seat.y))
+}
 function placeInScene(p:Connection,scene:SceneId,now:number){
-  const spot=arrivalSpot(scene,p.scene)
-  // Seats and drinks stay behind: a visitor always arrives standing, empty-handed.
-  p.scene=scene;p.lastSceneChange=now;p.x=spot.x;p.y=spot.y;p.lastMove=now;p.pose='stand';p.seat=null;p.drink=null
+  const spot=(scene==='jeepney'?freeJeepneySeat(p):undefined)??arrivalSpot(scene,p.scene)
+  // Seats stay behind, so a visitor always arrives standing; their drink comes along.
+  p.scene=scene;p.lastSceneChange=now;p.x=spot.x;p.y=spot.y;p.lastMove=now;p.pose='stand';p.seat=null
   p.send(serialize({type:'scene_changed',scene,x:p.x,y:p.y,players:playerList(scene),online:members.size}))
 }
 // Sitting is only possible on a free seat in the visitor's own scene that they are standing at.
@@ -179,18 +194,28 @@ export function standUp(p:Connection){
   p.pose='stand';p.seat=null
   broadcastScene(p.scene,{type:'player_pose',id:p.id,pose:'stand'})
 }
-// The barista hands over a free virtual drink; everyone in the café sees the cup. Ordering again swaps it.
-export function takeDrink(p:Connection,drink:DrinkId){
+// A free virtual drink: from the barista in the café, or a cold can from the vending machine on the street.
+// One at a time: with a drink already in hand, the visitor is asked to throw it away first.
+export function takeDrink(p:Connection,drink:HeldDrink){
   const now=Date.now()
-  if(p.scene!=='cafe'||now-p.lastDrink<1500||p.drink===drink)return false
-  p.drink=drink;p.lastDrink=now
+  if(p.scene!==(isColdCan(drink)?'outside':'cafe')||now-p.lastDrink<1500)return false
+  if(p.drink){p.send(serialize({type:'drink_rejected',reason:'hands_full'}));return false}
+  p.drink=drink;p.lastDrink=now;heldDrinks.set(p.visitorId,drink)
   broadcastScene(p.scene,{type:'player_drink',id:p.id,drink})
   return true
 }
-// Sipping (with a drink in hand) and relaxing are short animations everyone in the café sees.
+// Into a garbage bin, from the floor spot in front of one in the visitor's scene: everyone there sees it go.
+export function trashDrink(p:Connection){
+  if(!p.drink)return false
+  if(!nearBin(p.scene,p.x,p.y)){p.send(serialize({type:'trash_rejected'}));return false}
+  p.drink=null;heldDrinks.delete(p.visitorId)
+  broadcastScene(p.scene,{type:'player_drink',id:p.id,drink:null})
+  return true
+}
+// Short animations everyone around sees: a sip (anywhere, with a drink in hand) or relaxing (in the café).
 export function playAction(p:Connection,action:CafeAction){
   const now=Date.now()
-  if(p.scene!=='cafe'||now-p.lastAct<800||(action==='sip'&&!p.drink))return false
+  if((action==='relax'&&p.scene!=='cafe')||now-p.lastAct<800||(action==='sip'&&!p.drink))return false
   p.lastAct=now
   broadcastScene(p.scene,{type:'player_act',id:p.id,action})
   return true
@@ -229,6 +254,7 @@ export function resetVisitorRoom(){
   const leaving=[...members.values()]
   members.clear()
   interactions.clear()
+  heldDrinks.clear()
   reportPace.clear()
   mutedVisitorIds.clear()
   for(const member of leaving){

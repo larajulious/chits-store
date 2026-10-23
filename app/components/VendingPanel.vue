@@ -2,14 +2,15 @@
 import {vendingProducts,type VendingProduct} from '../../shared/world'
 // A just-for-fun drinks machine on the street. Nothing is ordered or charged; products come from shared/world.ts.
 // menuAvailable: false while the store is closed, so there is no menu to point to.
-withDefaults(defineProps<{menuAvailable?:boolean}>(),{menuAvailable:true})
+// holding: the drink already in hand; one at a time, so the machine asks for the bin first.
+const props=withDefaults(defineProps<{menuAvailable?:boolean;holding?:string|null}>(),{menuAvailable:true,holding:null})
 const emit=defineEmits<{vend:[product:VendingProduct];menu:[]}>()
 const dispensing=ref<VendingProduct|null>(null),served=ref<VendingProduct|null>(null),drop=ref(0)
 let timer:ReturnType<typeof setTimeout>|undefined
 const lines:Record<string,string>={buko:'Fresh from the coconut!',calamansi:'Asim-kilig! So refreshing.',gulaman:'Sweet, cold and chewy.',mango:'Sunshine in a cup.',choco:'Creamy and ice cold.'}
 const shown=computed(()=>dispensing.value??served.value)
 function choose(product:VendingProduct){
-  if(product.soon||dispensing.value)return
+  if(product.soon||dispensing.value||props.holding)return
   dispensing.value=product;served.value=null;drop.value++
   emit('vend',product)
   clearTimeout(timer);timer=setTimeout(()=>{served.value=product;dispensing.value=null},900)
@@ -21,7 +22,7 @@ onBeforeUnmount(()=>clearTimeout(timer))
     <p class="vending-intro">Pick a cold drink! This one is just for fun.{{ menuAvailable?' Real meryenda orders are on Today’s Menu.':'' }}</p>
     <div class="vending-machine">
       <div class="vending-window" role="group" aria-label="Drinks">
-        <button v-for="product in vendingProducts" :key="product.id" type="button" class="vending-slot" :class="{soon:product.soon,active:dispensing?.id===product.id}" :disabled="product.soon||!!dispensing" :aria-label="product.soon?`${product.label}, coming soon`:`Get a ${product.label}`" @click="choose(product)">
+        <button v-for="product in vendingProducts" :key="product.id" type="button" class="vending-slot" :class="{soon:product.soon,active:dispensing?.id===product.id}" :disabled="product.soon||!!dispensing||!!holding" :aria-label="product.soon?`${product.label}, coming soon`:`Get a ${product.label}`" @click="choose(product)">
           <span class="vending-can" :style="{'--can':product.can,'--band':product.band}" aria-hidden="true"/>
           <span class="vending-name">{{ product.label }}</span>
           <small>{{ product.soon?'SOON':'FREE' }}</small>
@@ -29,7 +30,7 @@ onBeforeUnmount(()=>clearTimeout(timer))
       </div>
       <div class="vending-tray" aria-hidden="true"><span v-if="shown" :key="drop" class="vending-can dropped" :style="{'--can':shown.can,'--band':shown.band}"/></div>
     </div>
-    <p class="vending-status" role="status">{{ dispensing?'Clunk… clunk…':served?`Here’s your ${served.label}! ${lines[served.id]??''}`:'Tap a drink to get it.' }}</p>
+    <p class="vending-status" role="status">{{ dispensing?'Clunk… clunk…':served?`Here’s your ${served.label}! ${lines[served.id]??''} Tap Sip to drink it.`:holding?'Your hands are full. Throw your drink in the bin by the bench first.':'Tap a drink to get it.' }}</p>
     <button v-if="menuAvailable" type="button" class="btn small secondary dialog-action" @click="emit('menu')">See today’s menu</button>
   </div>
 </template>

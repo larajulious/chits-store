@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AvatarId } from '../../shared/avatars'
 import { clearVisitScene } from '../utils/visitScene'
-const avatar = ref<AvatarId>('mochi'), nickname = ref('')
+const avatar = ref<AvatarId>('mochi')
 const saving = ref(false)
 const error = ref('')
 const storeOpen=ref(false),statusReady=ref(false)
@@ -23,8 +23,8 @@ async function enter() {
   if (saving.value||!statusReady.value) return
   saving.value = true; error.value = ''
   try {
-    // A blank name is left out, so a returning visitor keeps the one they chose before.
-    await $fetch('/api/visitors/join', { method:'POST', body:{ avatar:avatar.value, ...(nickname.value.trim()?{nickname:nickname.value}:{}) } })
+    // No name at the door: a returning visitor keeps the one they chose inside, and anyone can set one there.
+    await $fetch('/api/visitors/join', { method:'POST', body:{ avatar:avatar.value } })
     // Every visit starts inside the store, even if this tab was last out on the street.
     clearVisitScene()
     await navigateTo('/store')
@@ -36,7 +36,7 @@ async function enter() {
 </script>
 <template>
   <div>
-    <StructuredEntrance v-model:avatar="avatar" v-model:nickname="nickname" :saving="saving" :error="error" :store-open="storeOpen" :status-ready="statusReady" @enter="enter"/>
+    <StructuredEntrance v-model:avatar="avatar" :saving="saving" :error="error" :store-open="storeOpen" :status-ready="statusReady" @enter="enter"/>
     <VisitDialog ref="thanksDialog" variant="thanks"/>
   </div>
 </template>

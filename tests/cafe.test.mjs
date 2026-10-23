@@ -18,8 +18,8 @@ test('Kape & Chits joins the world: linked doors, arrival spots and café seats'
   const dir=await mkdtemp(join(tmpdir(),'chits-cafe-world-'))
   t.after(()=>rm(dir,{recursive:true,force:true}))
   await writeFile(join(dir,'world.mjs'),compile(await readFile(new URL('../shared/world.ts',import.meta.url),'utf8')))
-  await writeFile(join(dir,'cafe.mjs'),compile(await readFile(new URL('../shared/cafe.ts',import.meta.url),'utf8')))
-  const {scenes,isScene,isSeat,onSceneFloor,sceneLinked,arrivalSpot,cafeSeats,sceneSeats,benchSeats}=await import(pathToFileURL(join(dir,'world.mjs')).href)
+  await writeFile(join(dir,'cafe.mjs'),compile(await readFile(new URL('../shared/cafe.ts',import.meta.url),'utf8')).replace("from './world'","from './world.mjs'"))
+  const {scenes,isScene,isSeat,onSceneFloor,sceneLinked,arrivalSpot,cafeSeats,sceneSeats,benchSeats,storeSeats,sceneBins,nearBin,jeepneySeats}=await import(pathToFileURL(join(dir,'world.mjs')).href)
   const {drinkOptions,isDrink,isCafeAction,conversationStarters,cafeMoods,isCafeMood,chooseCafeMood}=await import(pathToFileURL(join(dir,'cafe.mjs')).href)
   assert.equal(isScene('cafe'),true)
   assert.equal(onSceneFloor('cafe',scenes.cafe.spawn.x,scenes.cafe.spawn.y),true)
@@ -32,8 +32,18 @@ test('Kape & Chits joins the world: linked doors, arrival spots and café seats'
   // Seats sit on the floor and on the 20-unit walking grid, and are counted per scene.
   assert.ok(cafeSeats.length>=6)
   for(const seat of cafeSeats){assert.equal(onSceneFloor('cafe',seat.x,seat.y),true);assert.equal(seat.x%20,0);assert.equal(seat.y%20,0)}
-  assert.equal(sceneSeats.store.length,0);assert.equal(sceneSeats.outside,benchSeats)
-  assert.equal(isSeat(cafeSeats.length-1,'cafe'),true);assert.equal(isSeat(cafeSeats.length,'cafe'),false);assert.equal(isSeat(0,'store'),false)
+  assert.equal(sceneSeats.outside,benchSeats)
+  assert.equal(isSeat(cafeSeats.length-1,'cafe'),true);assert.equal(isSeat(cafeSeats.length,'cafe'),false)
+  // A jeepney is boarded from the street only, and drops its riders in front of the store; its bench is its floor.
+  assert.equal(sceneLinked('outside','jeepney'),true);assert.equal(sceneLinked('store','jeepney'),false);assert.equal(sceneLinked('jeepney','cafe'),false)
+  assert.deepEqual(arrivalSpot('outside','jeepney'),scenes.outside.spawn)
+  assert.equal(jeepneySeats.length,7);for(const seat of jeepneySeats)assert.equal(onSceneFloor('jeepney',seat.x,seat.y),true)
+  // The store's deck matches the café's: its benches and railing spots are the same places as theirs.
+  assert.equal(sceneSeats.store,storeSeats);assert.deepEqual(storeSeats,[...cafeSeats.slice(8,12),...cafeSeats.slice(14,19)])
+  assert.equal(isSeat(8,'store'),true);assert.equal(isSeat(9,'store'),false)
+  // Bins: one on the street, two in the café, one on the store's deck; each stand spot is on its scene's floor.
+  for(const [scene,bins] of Object.entries(sceneBins))for(const bin of bins){assert.equal(onSceneFloor(scene,bin.standX,bin.standY),true);assert.equal(nearBin(scene,bin.standX,bin.standY),true)}
+  assert.deepEqual(Object.values(sceneBins).map(bins=>bins.length),[1,0,1,2]);assert.equal(nearBin('store',180,510),false)
   assert.equal(isSeat(benchSeats.length),false,'the bench stays the default')
   assert.deepEqual(drinkOptions.map(d=>d.label),['Iced Coffee','Hot Latte','Cappuccino','Hot Chocolate'])
   assert.equal(isDrink('hot-latte'),true);assert.equal(isDrink('espresso'),false);assert.equal(isDrink({}),false)
@@ -58,7 +68,10 @@ test('the deck sky follows the Manila clock: morning, afternoon, sunset and a mo
   const dir=await mkdtemp(join(tmpdir(),'chits-sky-'))
   t.after(()=>rm(dir,{recursive:true,force:true}))
   await writeFile(join(dir,'scenery.mjs'),compile(await readFile(new URL('../game/scenery.ts',import.meta.url),'utf8')))
+  await writeFile(join(dir,'world.mjs'),compile(await readFile(new URL('../shared/world.ts',import.meta.url),'utf8')))
+  await writeFile(join(dir,'traffic.mjs'),compile(await readFile(new URL('../shared/traffic.ts',import.meta.url),'utf8')).replace("from './world'","from './world.mjs'"))
   const {skyAt,skyPhase,sunArc,moonArc,mixColor,manilaMinute,SKY_PREVIEW,volcanoSmoke,SMOKE_WINDOW_MS}=await import(pathToFileURL(join(dir,'scenery.mjs')).href)
+  const {trafficAt,jeepneyAtStop,JEEPNEY_STOP}=await import(pathToFileURL(join(dir,'traffic.mjs')).href)
   assert.deepEqual([450,840,1065,1290,120].map(skyPhase),['morning','afternoon','sunset','night','night'])
   for(const [name,minute] of Object.entries(SKY_PREVIEW))assert.ok(Number.isInteger(minute)&&minute>=0&&minute<1440,name)
   // Every minute of the day blends to a valid sky; neighbouring minutes barely differ, so the change is gradual.
@@ -88,6 +101,27 @@ test('the deck sky follows the Manila clock: morning, afternoon, sunset and a mo
   for(let i=1;i<samples.length;i++)assert.ok(Math.abs(samples[i]-samples[i-1])<=.26,'the plume eases in and out')
   const windows=new Set();for(let now=day;now<day+86_400_000;now+=SMOKE_WINDOW_MS/10)if(volcanoSmoke(now)>0)windows.add(Math.floor(now/SMOKE_WINDOW_MS))
   assert.ok(windows.size>40&&windows.size<240,`${windows.size} windows with a plume`)
+  // Traffic on the street: only now and then, each pass crossing the whole road. Cars and tricycles go both ways;
+  // jeepneys come along the near lane and wait at the stop, which is when visitors can board.
+  const passes=new Map()
+  for(let now=day;now<day+86_400_000;now+=250){
+    const pass=trafficAt(now)
+    if(!pass)continue
+    const seen=passes.get(pass.id)
+    passes.set(pass.id,{...pass,first:seen?.first??pass.x,last:pass.x,stopped:seen?.stopped||pass.stopped,stops:new Set([...(seen?.stops??[]),...(pass.stopped?[pass.x]:[])])})
+  }
+  const vehicles=[...passes.values()]
+  assert.ok(vehicles.length>1500&&vehicles.length<4300,`${vehicles.length} vehicles a day`)
+  assert.deepEqual(new Set(vehicles.map(p=>p.kind)),new Set(['car','jeepney','tricycle']))
+  const jeepneys=vehicles.filter(p=>p.kind==='jeepney'),others=vehicles.filter(p=>p.kind!=='jeepney')
+  assert.ok(jeepneys.length>600,'plenty of jeepneys to catch')
+  assert.ok(jeepneys.every(p=>p.rightward&&p.stopped&&p.stops.size===1&&p.stops.has(JEEPNEY_STOP.x)),'every jeepney waits at the stop')
+  assert.ok(others.every(p=>!p.stopped));assert.deepEqual(new Set(others.map(p=>p.rightward)),new Set([true,false]))
+  assert.ok(vehicles.every(p=>Math.abs(p.first-p.last)>1600),'each one drives all the way across')
+  // The server's boarding check: a jeepney waiting at the stop (with a moment's grace either side).
+  const waiting=[];for(let now=day;now<day+3_600_000;now+=1000)if(jeepneyAtStop(now))waiting.push(now)
+  assert.ok(waiting.length>200,`${waiting.length}s of jeepney waiting an hour`)
+  assert.ok(waiting.every(now=>trafficAt(now).stopped))
   // 15:30 UTC is 23:30 in Manila (no daylight saving).
   assert.equal(manilaMinute(new Date('2026-10-23T15:30:00Z')),23*60+30)
 })
@@ -163,20 +197,20 @@ test('the café is one shared, always-open room with seats, drinks, actions and 
     assert.equal(nextA.state.mood,'rain');assert.equal(nextA.state.startedAt,nextB.state.startedAt)
     assert.deepEqual(nextA.state.votes,{cafe:0,lofi:0,rain:0})
   })
-  await t.test('drinks are free, only in the café, shared with everyone there and with late joiners',async()=>{
+  await t.test('café drinks are free, one at a time, shared with everyone there and with late joiners',async()=>{
     const fromA=mark(a),fromB=mark(b)
     for(const drink of ['espresso',null,42,{id:'hot-latte'}])a.send({type:'drink',drink})
     await quiet(b,m=>m.type==='player_drink',fromB)
     a.send({type:'drink',drink:'hot-latte'})
     assert.deepEqual(await wait(b,m=>m.type==='player_drink',fromB),{type:'player_drink',id:a.id,drink:'hot-latte'})
     await wait(a,m=>m.type==='player_drink'&&m.id===a.id,fromA)
-    // Ordering again right away is too quick; after a moment the drink swaps.
-    a.send({type:'drink',drink:'cappuccino'});await quiet(b,m=>m.type==='player_drink'&&m.drink==='cappuccino',fromB)
-    await delay(1300);a.send({type:'drink',drink:'iced-coffee'})
-    await wait(b,m=>m.type==='player_drink'&&m.drink==='iced-coffee',fromB)
+    // One at a time: another drink is refused until this one goes in a bin. Cold cans come from the street's machine.
+    await delay(1600);a.send({type:'drink',drink:'cappuccino'})
+    assert.equal((await wait(a,m=>m.type==='drink_rejected',fromA)).reason,'hands_full')
+    await quiet(b,m=>m.type==='player_drink'&&m.drink==='cappuccino',fromB)
     const c=await connect(cookieC,'?scene=cafe')
     assert.equal(c.inbox.find(m=>m.type==='welcome').scene,'cafe')
-    assert.equal(c.inbox.find(m=>m.type==='welcome').players.find(p=>p.id===a.id).drink,'iced-coffee')
+    assert.equal(c.inbox.find(m=>m.type==='welcome').players.find(p=>p.id===a.id).drink,'hot-latte')
     c.ws.terminate();await wait(a,m=>m.type==='players'&&m.players.length===2,fromA)
   })
   await t.test('sip needs a drink; sip and relax reach the café only',async()=>{
@@ -217,24 +251,39 @@ test('the café is one shared, always-open room with seats, drinks, actions and 
     const back=await connect(cookieA,'?scene=cafe')
     assert.equal(back.inbox.find(m=>m.type==='welcome').scene,'cafe')
     assert.deepEqual(back.inbox.find(m=>m.type==='welcome').players.map(p=>p.id).sort(),[back.id,b.id].sort())
-    // The visitor arrives empty-handed after a reconnect.
-    assert.equal(back.inbox.find(m=>m.type==='welcome').players.find(p=>p.id===back.id).drink,undefined)
+    // A refresh or reconnect keeps the drink in hand.
+    assert.equal(back.inbox.find(m=>m.type==='welcome').players.find(p=>p.id===back.id).drink,'hot-latte')
     Object.assign(a,back)
     const reopen=await req('/api/admin/store/status',{method:'POST',cookie:admin,body:{open:true}});assert.equal(reopen.status,200)
   })
-  await t.test('leaving the café drops the drink and arrives at the café door outside',async()=>{
+  await t.test('drinks go everywhere with their holder; a cold can needs empty hands; only a bin lets go',async()=>{
     const fromB=mark(b)
     b.send({type:'drink',drink:'hot-chocolate'});await wait(b,m=>m.type==='player_drink'&&m.id===b.id,fromB)
     await delay(850);b.send({type:'scene',scene:'outside'})
     const out=await wait(b,m=>m.type==='scene_changed',fromB)
     assert.equal(out.scene,'outside');assert.deepEqual([out.x,out.y],[600,300])
-    assert.equal(out.players.find(p=>p.id===b.id).drink,undefined)
-    b.send({type:'drink',drink:'hot-latte'});b.send({type:'act',action:'relax'})
-    await quiet(b,m=>m.type==='player_drink'||m.type==='player_act',mark(b))
-    // Back in, still empty-handed.
+    assert.equal(out.players.find(p=>p.id===b.id).drink,'hot-chocolate')
+    // Hands full: no can from the machine. Relaxing is the café's, but a sip works anywhere.
+    const outside=mark(b)
+    await delay(1600);b.send({type:'drink',drink:'buko'})
+    assert.equal((await wait(b,m=>m.type==='drink_rejected',outside)).reason,'hands_full')
+    b.send({type:'act',action:'relax'});await quiet(b,m=>m.type==='player_act',outside)
+    await delay(850);b.send({type:'act',action:'sip'})
+    assert.deepEqual(await wait(b,m=>m.type==='player_act',outside),{type:'player_act',id:b.id,action:'sip'})
+    // The drink only goes from beside a bin: here, the one by the bench.
+    b.send({type:'trash'});await wait(b,m=>m.type==='trash_rejected',outside)
+    await walk(b,[[530,300],[460,300],[390,300],[320,300],[250,300],[180,300],[140,300],[100,300]])
+    b.send({type:'trash'})
+    assert.deepEqual(await wait(b,m=>m.type==='player_drink'&&m.id===b.id,outside),{type:'player_drink',id:b.id,drink:null})
+    // Empty-handed: a cold can (real flavours only; café drinks come from the barista), carried back into the café.
+    const empty=mark(b)
+    for(const drink of ['ube','hot-latte'])b.send({type:'drink',drink})
+    await quiet(b,m=>m.type==='player_drink',empty)
+    b.send({type:'drink',drink:'buko'})
+    assert.deepEqual(await wait(b,m=>m.type==='player_drink',empty),{type:'player_drink',id:b.id,drink:'buko'})
     await delay(850);const fromIn=mark(b);b.send({type:'scene',scene:'cafe'})
     const again=await wait(b,m=>m.type==='scene_changed',fromIn)
-    assert.equal(again.scene,'cafe');assert.equal(again.players.find(p=>p.id===b.id).drink,undefined)
+    assert.equal(again.scene,'cafe');assert.equal(again.players.find(p=>p.id===b.id).drink,'buko')
   })
   await t.test('repeated lines are refused; reports reach staff once per visitor',async()=>{
     await delay(1600)
@@ -268,6 +317,9 @@ test('the café is one shared, always-open room with seats, drinks, actions and 
     assert.equal(c.inbox.some(m=>m.type==='players'&&m.players.some(p=>p.id===a.id||p.id===b.id)),false)
     // The street hears only the café's mood (its weather: rain for the rainy mood), never the timeline or the votes.
     assert.ok(['cafe','lofi','rain'].includes((await wait(c,m=>m.type==='cafe_mood',fromC)).mood))
+    // Boarding: never from the store; from the street only beside a jeepney waiting at the stop (C is by the store door).
+    await delay(850);c.send({type:'scene',scene:'jeepney'})
+    assert.ok(['no_jeepney','too_far'].includes((await wait(c,m=>m.type==='scene_rejected'&&m.reason,fromC)).reason))
     // The street can't vote on, or hear, the café's music.
     c.send({type:'cafe_vote',mood:'lofi'});assert.equal((await wait(c,m=>m.type==='cafe_vote_rejected',fromC)).reason,'not_in_cafe')
     assert.equal(c.inbox.some(m=>m.type==='cafe_jukebox'),false)
@@ -278,6 +330,12 @@ test('the café is one shared, always-open room with seats, drinks, actions and 
     a.send({type:'sit',seat:19})
     await wait(a,m=>m.type==='player_pose'&&m.id===a.id&&m.seat===19,fromCr)
     assert.deepEqual(await wait(a,m=>m.type==='player_pose'&&m.id===a.id&&m.pose==='stand',fromCr,1100),{type:'player_pose',id:a.id,pose:'stand'})
+    // The store has a deck too: from the store's door, through its side doorway, to lean on its railing.
+    const cookieD=await visitor('maja'),d=await connect(cookieD),fromD=mark(d)
+    await walk(d,[[220,460],[260,410],[300,360],[340,320],[380,300],[420,300]])
+    d.send({type:'sit',seat:4})
+    assert.deepEqual(await wait(d,m=>m.type==='player_pose'&&m.id===d.id,fromD),{type:'player_pose',id:d.id,pose:'sit',seat:4})
+    d.ws.terminate()
     // B leaves; the street's count follows.
     await delay(850);b.send({type:'scene',scene:'outside'})
     await wait(c,m=>m.type==='players'&&m.scene==='outside'&&m.cafe===1,fromC)

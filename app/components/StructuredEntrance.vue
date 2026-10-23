@@ -1,12 +1,8 @@
 <script setup lang="ts">
 import { avatarOptions, type AvatarId } from '../../shared/avatars'
-import { NICKNAME_MAX, checkNickname } from '../../shared/nickname'
-const props=defineProps<{avatar:AvatarId;nickname:string;saving:boolean;error:string;storeOpen:boolean;statusReady:boolean}>()
-const emit=defineEmits<{ 'update:avatar':[value:AvatarId];'update:nickname':[value:string];enter:[] }>()
+const props=defineProps<{avatar:AvatarId;saving:boolean;error:string;storeOpen:boolean;statusReady:boolean}>()
+const emit=defineEmits<{ 'update:avatar':[value:AvatarId];enter:[] }>()
 const selected=computed(()=>avatarOptions.find(option=>option.id===props.avatar)!)
-// The optional name, checked as you type with the server's own rule.
-const nameCheck=computed(()=>checkNickname(props.nickname))
-const shownName=computed(()=>nameCheck.value.ok&&nameCheck.value.nickname||selected.value.label)
 </script>
 <template>
   <main class="structured-lobby">
@@ -47,14 +43,10 @@ const shownName=computed(()=>nameCheck.value.ok&&nameCheck.value.nickname||selec
           </button>
         </fieldset>
         <p class="carousel-hint"><span>Swipe to explore all {{ avatarOptions.length }} buddies</span><StoreGlyph name="arrow"/></p>
-        <div class="buddy-selection" aria-live="polite"><span class="selected-portrait"><AvatarIcon :avatar="avatar"/></span><div><span class="selection-label">YOUR FOOD BUDDY</span><strong>{{ shownName }}</strong></div><span class="selection-ready"><StoreGlyph v-if="storeOpen" name="check"/>{{ storeOpen?'Ready to visit':'See you soon' }}</span></div>
-        <label class="nickname-field"><span class="selection-label">YOUR NAME <em>(optional)</em></span>
-          <input class="input" :value="nickname" :maxlength="NICKNAME_MAX+8" :placeholder="selected.label" autocomplete="nickname" :disabled="saving" :aria-invalid="!nameCheck.ok" aria-describedby="nickname-help" @input="emit('update:nickname',($event.target as HTMLInputElement).value)">
-          <small id="nickname-help" :class="{error:!nameCheck.ok}">{{ nameCheck.ok?`Others see you as “${shownName} #…”, with your own visitor number.`:nameCheck.reason }}</small>
-        </label>
+        <div class="buddy-selection" aria-live="polite"><span class="selected-portrait"><AvatarIcon :avatar="avatar"/></span><div><span class="selection-label">YOUR FOOD BUDDY</span><strong>{{ selected.label }}</strong></div><span class="selection-ready"><StoreGlyph v-if="storeOpen" name="check"/>{{ storeOpen?'Ready to visit':'See you soon' }}</span></div>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
-        <button class="enter-bakery" type="submit" :disabled="saving||!statusReady||!nameCheck.ok"><span>{{ saving?'Opening the door…':!statusReady?'Checking store…':storeOpen?'Enter the store':'Visit the street' }}</span><StoreGlyph name="arrow"/></button>
-        <p class="entry-note">{{ statusReady&&!storeOpen?'No account needed. Ordering opens again when we do.':'No account needed. Skip the name and we’ll use your buddy’s.' }}</p>
+        <button class="enter-bakery" type="submit" :disabled="saving||!statusReady"><span>{{ saving?'Opening the door…':!statusReady?'Checking store…':storeOpen?'Enter the store':'Visit the street' }}</span><StoreGlyph name="arrow"/></button>
+        <p class="entry-note">{{ statusReady&&!storeOpen?'No account needed. Ordering opens again when we do.':'No account needed. You can pick a name once you’re inside.' }}</p>
       </form>
     </div>
     <footer class="lobby-footer"><span>A little pause in your day.</span><span>Choose a buddy. Stay awhile.</span></footer>
@@ -74,7 +66,6 @@ const shownName=computed(()=>nameCheck.value.ok&&nameCheck.value.nickname||selec
 .buddy-panel{padding:28px;background:var(--paper);border:1px solid #ded0bd;border-radius:24px;box-shadow:0 8px 28px #67482708}.buddy-panel-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.buddy-panel-heading .lobby-eyebrow{margin-bottom:6px}.buddy-panel-heading h2{font-size:22px;letter-spacing:-.045em;line-height:1.2;margin:0}.buddy-count{font-size:10px;font-weight:700;border:1px solid var(--line);border-radius:100px;padding:5px 8px;white-space:nowrap;color:var(--quiet)}.buddy-description{font-size:12px;color:var(--quiet);margin:10px 0 22px}
 .buddy-grid{min-width:0;border:0;padding:0;margin:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.buddy-choice{position:relative;min-width:0;min-height:92px;padding:13px 4px 9px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;border:1px solid #e6dbc9;border-radius:13px;background:#f9f4e9;color:#6e5844;transition:background .15s,border-color .15s,box-shadow .15s}.buddy-choice:hover{background:#f2e7d4;border-color:#c9ac85}.buddy-choice.selected{border:2px solid #946d47;background:#eee0c5;box-shadow:0 0 0 2px #946d4710;padding:12px 3px 8px;color:#523a25}.buddy-choice :deep(.avatar-symbol){height:38px;font-size:30px}.buddy-choice :deep(.avatar-symbol svg){width:38px;height:38px}.buddy-name{font-size:11px;font-weight:800;line-height:1.3;min-height:2.6em;display:flex;align-items:center;text-align:center}.selection-check{position:absolute;right:5px;top:5px;width:15px;height:15px;border-radius:50%;background:#946d47;color:#fff;display:grid;place-items:center}.selection-check :deep(svg){width:11px;height:11px;stroke-width:2.5}
 .buddy-selection{display:flex;align-items:center;gap:10px;margin-top:20px;padding:12px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.selected-portrait{width:40px;height:40px;display:grid;place-items:center;border-radius:11px;background:#eee5d3}.selected-portrait :deep(.avatar-symbol){transform:scale(.7)}.selection-label{display:block;font-size:9px;font-weight:800;letter-spacing:.09em;color:#9a8369}.buddy-selection strong{display:block;margin-top:3px;font-size:13px}.selection-ready{margin-left:auto;display:flex;align-items:center;gap:4px;font-size:10px;color:#71805b}.selection-ready svg{width:13px;height:13px}
-.nickname-field{display:grid;gap:6px;margin-top:14px}.nickname-field em{font-style:normal;font-weight:600;letter-spacing:0;color:#b29a7f}.nickname-field .input{width:100%;min-height:44px}.nickname-field small{font-size:10px;line-height:1.5;color:#9a836a}.nickname-field small.error{margin:0;color:#a8432f}
 .enter-bakery{width:100%;margin-top:18px;min-height:49px;padding:12px 17px;display:flex;align-items:center;justify-content:space-between;border:1px solid #62442f;border-radius:12px;background:#765339;color:#fff9ee;font-weight:800;font-size:13px;box-shadow:0 3px 0 #563a29}.enter-bakery:hover{background:#65452f}.enter-bakery:active{transform:translateY(2px);box-shadow:0 1px 0 #563a29}.entry-note{text-align:center;font-size:10px;line-height:1.6;color:#9a836a;margin:12px 0 0}.buddy-panel .error{margin-bottom:0}
 .lobby-footer{display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding-top:17px;color:#a18a71;font-size:10px;letter-spacing:.02em}
 button:focus-visible{outline:3px solid #6c875d;outline-offset:3px}

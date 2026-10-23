@@ -19,11 +19,11 @@ test('scene floors, spawns and bench seats agree with each other',async t=>{
   t.after(()=>rm(dir,{recursive:true,force:true}))
   await writeFile(join(dir,'world.mjs'),compile(await readFile(new URL('../shared/world.ts',import.meta.url),'utf8')))
   const {scenes,isScene,onSceneFloor,benchSeats,isSeat,vendingProducts}=await import(pathToFileURL(join(dir,'world.mjs')).href)
-  assert.deepEqual(Object.keys(scenes),['store','outside','cafe'])
+  assert.deepEqual(Object.keys(scenes),['store','outside','cafe','jeepney'])
   for(const [id,scene] of Object.entries(scenes))assert.equal(onSceneFloor(id,scene.spawn.x,scene.spawn.y),true,`${id} spawn is walkable`)
-  // The store keeps the bounds the server has always enforced.
-  assert.deepEqual(scenes.store.floor,{minX:20,maxX:340,minY:260,maxY:542})
-  assert.equal(onSceneFloor('store',600,300),false)
+  // The store's floor runs on through a doorway onto its deck.
+  assert.deepEqual(scenes.store.floor,{minX:20,maxX:700,minY:260,maxY:542},'the room, then its deck through the side doorway')
+  assert.equal(onSceneFloor('store',600,300),true);assert.equal(onSceneFloor('store',710,300),false)
   assert.equal(onSceneFloor('outside',600,300),true)
   assert.equal(onSceneFloor('outside',NaN,300),false)
   for(const seat of benchSeats)assert.equal(onSceneFloor('outside',seat.x,seat.y),true)

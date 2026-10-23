@@ -170,15 +170,7 @@ export function streetEdgeArt(){
   ground(art,(4+EDGE.width)%22)
   return art
 }
-// A striped sawhorse barricade and big potted plants mark where the walkable street ends.
-export function barricadeArt(){
-  const art=new PixelArt(30,18)
-  art.stroke(5,4,2,17,1,WOOD_DARK,false).stroke(9,4,12,17,1,WOOD_DARK,false).stroke(21,4,18,17,1,WOOD_DARK,false).stroke(25,4,28,17,1,WOOD_DARK,false)
-  art.rect(0,3,30,5,'#fff8ea')
-  for(let x=0;x<30;x+=6)art.rect(x,3,3,5,'#d9473f')
-  art.rect(13,4,4,3,'#ffd45e')
-  return art.outline(INK).shadow(15,17.4,14,1)
-}
+// Big potted plants mark where the walkable pavements end; the road runs on (see vehicleArt).
 export function bigPotArt(){
   const art=new PixelArt(22,28)
   art.ellipse(11,9,10,8,LEAF_DARK).ellipse(7,8,6,5,LEAF).ellipse(15,6,6,5,LEAF).ellipse(11,4,4,3,LEAF_LIGHT)
@@ -348,3 +340,106 @@ export function planterArt(){
 }
 export function leafArt(){return new PixelArt(4,3).rect(0,1,3,1,LEAF).set(2,0,LEAF_LIGHT).set(3,1,LEAF_DARK)}
 export function canArt(){const can=vendingProducts[0]!;return new PixelArt(5,7).rect(0,0,5,7,can.can).rect(0,3,5,1,can.band).rect(0,0,5,1,'#d9d2c4').outline(INK)}
+
+// Traffic on the road, seen from the side and facing right (the scene flips it for the other lane), sized against the
+// visitors (26 art pixels tall): a car a little taller than a visitor and over twice as long, a longer jeepney with its
+// stripes, chrome grille and hood ornament, and a tricycle with its sidecar and a driver. Frames 0 and 1 turn the wheels.
+export type Vehicle='car'|'jeepney'|'tricycle'
+const CAR_PAINTS=[['#c8553d','#e07a5c','#a8432f'],['#4f8a83','#6ea8a0','#3c6e68'],['#f6c445','#fbe39a','#d9a12e'],['#7cc4e8','#b9e0ef','#5a9fc4']] as const
+const STRIPES=[['#c8553d','#f6c445','#4f8a83'],['#8b5cc4','#ffd45e','#c8553d'],['#4f8a83','#f3a09c','#5a9fc4'],['#d9473f','#79945b','#f6c445']] as const
+const GLASS='#b9e0ef',GLASS_SHINE='#e8f6fb',TYRE='#2b2430',HUB='#9aa3ab',CHROME='#c5cad0',HEADLIGHT='#fff3c4',TAILLIGHT='#e0533f',CABIN='#3b3d44'
+function wheel(art:PixelArt,cx:number,cy:number,r:number,frame:0|1){
+  art.ellipse(cx,cy,r+1.2,r+1.2,'#1e1a22').ellipse(cx,cy,r,r,TYRE).ellipse(cx,cy,r*.5,r*.5,HUB).set(Math.floor(cx),Math.floor(cy),'#5f666e')
+  // Two spokes that swap between frames, so the wheel turns.
+  const s=Math.floor(r*.5)
+  if(frame)art.set(Math.floor(cx)-s,Math.floor(cy)-s,TYRE).set(Math.floor(cx)+s,Math.floor(cy)+s,TYRE)
+  else art.set(Math.floor(cx)+s,Math.floor(cy)-s,TYRE).set(Math.floor(cx)-s,Math.floor(cy)+s,TYRE)
+}
+export function vehicleArt(kind:Vehicle,paint:number,frame:0|1){
+  if(kind==='jeepney')return jeepneyArt(paint,frame)
+  if(kind==='tricycle'){
+    const art=new PixelArt(54,34),[body,light,dark]=CAR_PAINTS[paint%CAR_PAINTS.length]!
+    // The covered sidecar: a roof, its body with a dark window, and a little light at the back.
+    art.rect(1,3,32,3,dark).rect(2,2,30,1,light).rect(3,6,28,19,body).rect(3,6,28,1,light).rect(3,24,28,1,dark)
+    art.rect(7,9,19,9,CABIN).rect(7,9,19,1,'#5a5c64').rect(27,9,3,9,GLASS).set(4,20,TAILLIGHT).set(4,21,TAILLIGHT)
+    // The motorcycle: frame, seat, tank, handlebars and headlight.
+    art.rect(30,21,18,5,'#3b3d44').rect(31,19,11,2,'#5e3d27').rect(41,18,6,3,body).rect(41,18,6,1,light)
+    art.rect(47,9,2,13,HUB).rect(45,9,6,1,HUB).rect(49,15,3,3,HEADLIGHT).set(51,15,'#ffffff')
+    // The driver, about a visitor's size: helmet, white shirt, arms to the handlebars, legs on the pegs.
+    art.ellipse(38,6,4.5,4.5,'#4f8a83').rect(34,6,9,2,'#3f6a4c').rect(40,6,3,3,'#f3cf82').set(41,7,'#2b1d16')
+    art.rect(35,10,7,9,'#f8f3e6').rect(41,10,1,9,'#e6dccb').rect(41,12,6,2,'#f3cf82').rect(36,19,8,2,'#4a5f7a').rect(42,21,2,4,'#4a5f7a').rect(42,25,3,1,'#5a3b27')
+    wheel(art,15,28,5,frame);wheel(art,45,28,5,frame)
+    return art.outline(INK).shadow(27,33.4,25,1)
+  }
+  const art=new PixelArt(64,32),[body,light,dark]=CAR_PAINTS[paint%CAR_PAINTS.length]!
+  // The cabin narrows to the roof: the rear pillar leans back, the windshield forward; two side windows.
+  for(let y=4;y<15;y++){
+    const left=Math.round(18-(y-4)*.45),right=Math.round(42+(y-4)*.6)
+    art.rect(left,y,right-left,1,y===4?light:body)
+  }
+  for(let y=6;y<14;y++){
+    const left=Math.round(19-(y-6)*.4),right=Math.round(43+(y-6)*.5)
+    art.rect(left,y,30-left,1,GLASS).rect(33,y,right-33,1,GLASS)
+  }
+  art.set(21,7,GLASS_SHINE).set(22,8,GLASS_SHINE).set(36,7,GLASS_SHINE).set(37,8,GLASS_SHINE)
+  // Hood, trunk and the long lower body with door lines, handles and sills.
+  art.rect(46,12,15,3,body).rect(46,12,15,1,light).rect(4,13,12,2,body).rect(4,13,12,1,light)
+  art.rect(2,15,60,10,body).rect(2,15,60,1,light).rect(2,24,60,1,dark).rect(30,15,1,9,dark).rect(46,15,1,9,dark)
+  art.rect(24,18,3,1,dark).rect(40,18,3,1,dark).rect(2,25,60,1,'#5f666e')
+  // Lights and bumpers.
+  art.rect(59,15,3,2,HEADLIGHT).rect(2,15,2,3,TAILLIGHT).rect(61,19,3,4,CHROME).rect(0,19,3,4,CHROME)
+  wheel(art,15,26,5,frame);wheel(art,49,26,5,frame)
+  return art.outline(INK).shadow(32,31.4,30,1)
+}
+
+// The jeepney, as it should look: a cream canopy with a route board, a painted passenger body with open windows (some
+// with riders' heads in them), a wave and a stripe of side art over a chrome strip, the open rear door with its grab
+// bar and step, then a long low hood with the windshield, side mirror, silver horse, chrome grille, round headlights
+// and bumper, and fenders over both wheels.
+const JEEP_PAINTS=[['#c8553d','#e07a5c','#a8432f'],['#3f7aa0','#5a9fc4','#2f5f80'],['#8b5cc4','#a98ad8','#643a9c'],['#4f8a5a','#6fa87a','#3a6a44']] as const
+const RIDER_HEADS=['#ffeed3','#f4d17c','#b38b6f','#f4a8b1','#c88b4d','#89a665','#b28ac5']
+function jeepneyArt(paint:number,frame:0|1){
+  const art=new PixelArt(98,40),[base,baseLight,baseDark]=JEEP_PAINTS[paint%JEEP_PAINTS.length]!,chromeDark='#9aa3ab'
+  // Fenders first, so the body and wheels sit over them.
+  art.ellipse(22,31,9,6,baseDark).ellipse(80,31,9,6,baseDark)
+  // Canopy and route board.
+  art.rect(5,3,64,1,'#fffaf0').rect(4,4,66,2,'#fff1cf').rect(4,6,66,1,'#e6d6b0')
+  art.rect(46,0,22,4,'#fffdf6').rect(46,0,22,1,'#ffffff')
+  for(let x=48;x<66;x+=3)art.rect(x,1,2,2,'#c8553d')
+  // Passenger body, open windows and riders.
+  art.rect(5,7,64,22,base).rect(5,7,64,1,baseLight).rect(5,28,64,1,baseDark)
+  for(let i=0;i<7;i++){
+    const x=9+i*8
+    art.rect(x,9,6,7,CABIN).rect(x,9,6,1,'#5a5c64')
+    if((paint+i)%3!==1){const head=RIDER_HEADS[(i*3+paint)%RIDER_HEADS.length]!;art.ellipse(x+3,13,2.6,2.6,head).set(x+2,12,'#2b1d16').set(x+4,12,'#2b1d16')}
+  }
+  // Side art: a white wave, a yellow stripe with dots, and the chrome strip.
+  for(let x=6;x<68;x++){const y=19+Math.round(Math.sin(x/4)*1.4);art.set(x,y,'#fffaf0').set(x,y+1,'#fffaf0')}
+  art.rect(5,23,64,2,'#ffd45e')
+  for(let x=9;x<67;x+=6)art.set(x,25,'#ffd45e').set(x+1,25,'#fff1b0')
+  art.rect(5,26,64,1,CHROME)
+  // The open rear door, grab bar and step.
+  art.rect(0,8,6,20,CABIN).rect(0,8,1,20,baseDark).rect(3,9,1,17,CHROME).rect(0,28,8,2,chromeDark).set(1,20,TAILLIGHT).set(1,21,TAILLIGHT)
+  // Windshield and mirror, the long low hood, the silver horse.
+  art.rect(69,7,5,11,GLASS).rect(69,7,5,1,base).set(70,9,GLASS_SHINE).set(71,10,GLASS_SHINE)
+  art.rect(72,9,1,2,chromeDark).rect(73,8,2,3,CHROME)
+  art.rect(69,17,22,12,base).rect(69,17,22,1,baseLight).rect(69,28,22,1,baseDark).rect(71,22,18,1,CHROME)
+  for(const [x,y] of [[83,15],[84,14],[85,14],[86,13],[85,15],[84,16],[86,16]] as const)art.set(x,y,CHROME)
+  art.set(87,12,'#e6e9ec').set(84,13,'#e6e9ec')
+  // Chrome grille, headlights and bumper.
+  art.rect(91,16,5,14,CHROME)
+  for(let y=18;y<29;y+=2)art.rect(92,y,3,1,'#7f8890')
+  art.ellipse(89,20,1.8,1.8,HEADLIGHT).ellipse(89,26,1.4,1.4,'#ffb347')
+  art.rect(86,30,12,2,CHROME).rect(86,31,12,1,chromeDark)
+  // A mud flap behind each wheel.
+  art.rect(31,29,2,5,'#2b2430').rect(89,29,2,4,'#2b2430')
+  wheel(art,22,33,5.5,frame);wheel(art,80,33,5.5,frame)
+  return art.outline(INK).shadow(49,39.4,46,1)
+}
+// The jeepney stop's sign: a post with a green plate the scene letters.
+export function jeepneyStopArt(){
+  const art=new PixelArt(26,34)
+  art.rect(12,10,2,23,'#7f8890').rect(12,10,1,23,'#c5cad0')
+  art.box(0,0,26,12,'#3f6a4c','#2b3d30').rect(1,1,24,1,'#4f8a5a')
+  return art.outline(INK).shadow(13,33.4,6,1)
+}

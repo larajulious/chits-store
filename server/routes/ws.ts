@@ -1,11 +1,11 @@
 import { defineWebSocketHandler } from 'h3'
 import { allowedOrigin, visitorSessionFromCookie, visitorName } from '../utils/auth'
-import { joinRoom, leaveRoom, findMember, broadcastScene, publishChat, onlineCount, isChatEnabled, isMuted, authorized, recordInteraction, changeScene, sitDown, standUp, takeDrink, playAction, reportChat } from '../utils/room'
+import { joinRoom, leaveRoom, findMember, broadcastScene, publishChat, onlineCount, isChatEnabled, isMuted, authorized, recordInteraction, changeScene, sitDown, standUp, takeDrink, trashDrink, playAction, reportChat } from '../utils/room'
 import { isScene, isSeat, onSceneFloor, scenes, type SceneId } from '../../shared/world'
 import {isStoreOpen} from '../utils/store'
 import {jukeboxState, jukeboxVoteOf, voteJukebox} from '../utils/jukebox'
 import {catTaps, isCatName, tapCat} from '../utils/cat-taps'
-import {isCafeAction, isCafeMood, isDrink} from '../../shared/cafe'
+import {isCafeAction, isCafeMood, isHeldDrink} from '../../shared/cafe'
 import {cafeJukeboxState, cafeMood, cafeVoteOf, voteCafeMood} from '../utils/cafeJukebox'
 
 export default defineWebSocketHandler({
@@ -27,6 +27,8 @@ export default defineWebSocketHandler({
     let scene:SceneId='store'
     try{const wanted=new URL(request?.url||'/ws','http://localhost').searchParams.get('scene');if(isScene(wanted))scene=wanted}catch{}
     if(scene==='store'&&!isStoreOpen())scene='outside'
+    // A refresh mid-ride gets off the jeepney: it drops the visitor in front of the store.
+    if(scene==='jeepney')scene='outside'
     const {x,y}=scenes[scene].spawn
     joinRoom({ id:peer.id, visitorId:visitor.id, expiresAt:session!.expiresAt, nickname:visitorName(visitor), avatar:visitor.avatar_key,
       scene, x, y, pose:'stand', seat:null, drink:null, lastDrink:0, lastAct:0, lastSceneChange:0, lastMove:Date.now(), lastChat:0, chatWindowStart:Date.now(), chatCount:0,
@@ -96,7 +98,9 @@ export default defineWebSocketHandler({
     } else if (data.type==='stand') {
       standUp(p)
     } else if (data.type==='drink') {
-      if(isDrink(data.drink))takeDrink(p,data.drink)
+      if(isHeldDrink(data.drink))takeDrink(p,data.drink)
+    } else if (data.type==='trash') {
+      trashDrink(p)
     } else if (data.type==='act') {
       if(isCafeAction(data.action))playAction(p,data.action)
     } else if (data.type==='report') {

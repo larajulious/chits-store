@@ -2,18 +2,22 @@ import Phaser from 'phaser'
 import { avatarOptions, type AvatarId } from '../shared/avatars'
 import { reactionOptions } from '../shared/reactions'
 import {mascotFloorPoint,residentCats,storeObstacles,type CatMood,type CatName,type CatSnapshot,type CatTaps} from '../shared/store-mascot'
-import {scenes} from '../shared/world'
+import {sceneBins,scenes,storeSeats,type Pose} from '../shared/world'
+import {DECK_BENCHES,DECK_LEFT,RAIL_Y,TanawView,createDeckTextures,deckObstacles} from './tanawView'
 import {createLocalMascot} from './localMascot'
+import {HeldDrinks,createDrinkTextures} from './heldDrink'
+import {isHeldDrink,type CafeAction,type HeldDrink} from '../shared/cafe'
 import * as art from './pixelArt'
 import {BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,NAME_TAG_GAP,PX,TAG_FONT,Tag,MIN_VIEW_W,characterPhase,createReactionTextures,currentDaylight,findPath,isHalloweenSeason,setDepthIfChanged,slideDoor,tagDepth,tapSparks,visitorFrame,type BoardOrder,type Daylight,type Player,type WorldGame} from './common'
 
 export type Avatar = AvatarId
 export type {BoardOrder,Player} from './common'
-export type StoreGame = WorldGame & { tossYarn:()=>boolean;petCat:()=> 'petted'|'too_far'|'busy';showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setJukebox:(state:JukeboxScene)=>void;setMenuItems:(items:string[]|null)=>void;setCatTaps:(taps:CatTaps)=>void }
+export type StoreGame = WorldGame & { tossYarn:()=>boolean;petCat:()=> 'petted'|'too_far'|'busy';showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setJukebox:(state:JukeboxScene)=>void;setMenuItems:(items:string[]|null)=>void;setCatTaps:(taps:CatTaps)=>void;
+  setPose:(id:string,pose:Pose,seat?:number)=>void;enjoyView:()=>void;standUp:()=>void }
 // playing: the shared jukebox has a song on. audible: this visitor is listening to it.
 export type JukeboxScene={playing:boolean;audible:boolean}
 // arriving: the visitor has just walked in from the street, so the door closes behind them.
-type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onCatMeow:(name:CatName)=>void;onCatTap?:(name:CatName)=>void;catEnabled?:boolean;guideEnabled?:boolean;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;daylight?:Daylight;viewWidth?:number}
+type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onAct:(action:CafeAction)=>void;onPose:(pose:Pose,seat?:number)=>void;onCatMeow:(name:CatName)=>void;onCatTap?:(name:CatName)=>void;catEnabled?:boolean;guideEnabled?:boolean;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;daylight?:Daylight;skyMinute?:number;viewWidth?:number}
 // joinedDance: set once the character starts dancing on the floor, cleared when they step off it.
 type Character = {sprite:Phaser.GameObjects.Image;avatar:string;phase:number;joinedDance?:boolean}
 type ShopCat = {name:CatName;roams:boolean;sprite:Phaser.GameObjects.Image;label:Tag;skin:string;counter?:Tag;counterUntil:number;joinedDance?:boolean}
@@ -22,17 +26,25 @@ const CAT_TAP_WORDS:Record<CatName,string>={Miming:'meow',Onay:'purr'}
 // Texture prefix per cat; Miming keeps the original cat-* names.
 const CAT_SKINS:Record<CatName,string>={Miming:'cat',Onay:'onay'}
 const CAT_POSES=[['idle','stand'],['walk','walk'],['sit','sit'],['rest','lie'],['sleep','sleep'],['stretch','stretch'],['notice','notice'],['play','play']] as const
-type VisitorCharacter = Character & {label:Tag;movingUntil:number;bubble?:Tag|Phaser.GameObjects.Image}
+// pose/seat: sitting on a deck bench or leaning on its railing (sitSince starts the little hop onto a bench).
+type VisitorCharacter = Character & {label:Tag;movingUntil:number;bubble?:Tag|Phaser.GameObjects.Image;pose?:Pose;seat?:number;sitSince?:number}
 // The world stays 360x580 with the floor at y 260..542: the server validates moves against it (shared/world.ts).
 const {width:W,height:H}=scenes.store,CELL=20
 // The front doorway opens onto the street. Holding down against it for a moment also walks out.
 const DOOR={x:180,standY:540,halfWidth:46,pushMs:220,triggerY:536}
-const obstructions=storeObstacles.map(box=>new Phaser.Geom.Rectangle(box.x,box.y,box.w,box.h))
+// The room is the left half of the scene; its Tanaw Deck (see tanawView.ts) is the right half, through a doorway near
+// the top of the room's right wall (the apps sign and the feedback board stand along the rest of it).
+const ROOM_W=360,DOORWAY={top:252,bottom:362},LIGHT_DEPTH=592,SIT_MS=220
+// Deck seats (see storeSeats): two benches (0-3) and five spots at the railing (4-8), all facing the view.
+const DECK_SEATS=storeSeats.map((spot,i)=>i<4?{...spot,kind:'bench' as const,lift:22}:{...spot,kind:'rail' as const,lift:0})
+const RAIL_SEATS=[4,5,6,7,8],BENCH_SEATS=[0,1,2,3],DECK_BENCH_SEATS=DECK_BENCHES.map((x,i)=>({x,seats:[i*2,i*2+1]}))
+const obstructions=[...storeObstacles,...deckObstacles(DOORWAY),...sceneBins.store.map(bin=>({x:bin.x-12,y:bin.y-10,w:24,h:18}))]
+  .map(box=>new Phaser.Geom.Rectangle(box.x,box.y,box.w,box.h))
 const feedbackArea=obstructions[0]!
 // The sign advertising custom and mobile app development stands between the jukebox and the feedback board;
 // tapping it walks the visitor to its left side and opens the ad.
-const AD_SIGN={x:322,y:372,standX:280,standY:380}
-const adSignArea=obstructions[2]!
+const AD_SIGN={x:322,y:408,standX:280,standY:420}
+const adSignArea=obstructions[1]!
 // The guide's loop keeps clear of Miming's spot by the yarn and Onay's spot by the feedback board.
 // Back-right corner beside the order counter, above the walkable floor (y 260+), so it never blocks movement.
 const JUKEBOX={x:328,y:227,standX:320,standY:300,depth:256}
@@ -83,14 +95,16 @@ function cheerLine(previous:string,music:boolean,crowd:boolean){
   return lines[0]!
 }
 const menuGuideStops=[{x:170,y:440},{x:160,y:300},{x:200,y:280},{x:280,y:420},{x:220,y:530},{x:200,y:400},{x:230,y:540}]
-function bounded(x:number,y:number){return Math.max(20,Math.min(340,x))>=20&&x>=20&&x<=340&&y>=260&&y<=542&&!obstructions.some(r=>r.contains(x,y))}
-function closestPoint(x:number,y:number){const a=Math.max(20,Math.min(340,x)),b=Math.max(260,Math.min(542,y));if(bounded(a,b))return {x:a,y:b};return {x:180,y:500}}
+function bounded(x:number,y:number){return x>=20&&x<=700&&y>=260&&y<=542&&!obstructions.some(r=>r.contains(x,y))}
+function closestPoint(x:number,y:number){const a=Math.max(20,Math.min(700,x)),b=Math.max(260,Math.min(542,y));if(bounded(a,b))return {x:a,y:b};return {x:180,y:500}}
 function pathFind(start:Phaser.Math.Vector2,target:Phaser.Math.Vector2){return findPath(start,target,bounded,CELL)}
 
 class StoreScene extends Phaser.Scene {
   private opts:Options
   private zoom:number
   private self?:VisitorCharacter
+  // Drinks visitors carry in from the street or the café. The store has no bin: they are thrown away outside.
+  private drinks?:HeldDrinks
   private remotes=new Map<string,VisitorCharacter>()
   private staff:Character[]=[]
   private menuGuide?:VisitorCharacter
@@ -111,6 +125,13 @@ class StoreScene extends Phaser.Scene {
   private lastY=510
   private selfId=''
   private selfBubble?:Tag|Phaser.GameObjects.Image
+  // The deck beside the room: its view, its bin, whether this visitor is out there, and their thoughts about it.
+  private view?:TanawView
+  private bins:Phaser.GameObjects.Image[]=[]
+  private onDeck=false
+  private nextViewThought=0
+  private notice?:Tag
+  private noticeTimer?:Phaser.Time.TimerEvent
   private cashier?:Phaser.GameObjects.Image
   private cashierBubble?:Tag
   private cashierBubbleTimer?:Phaser.Time.TimerEvent
@@ -125,11 +146,6 @@ class StoreScene extends Phaser.Scene {
   // Null until the server has sent the shared totals; taps before then aren't shown or sent.
   private catTaps:CatTaps|null=null
   private yarnSprite?:Phaser.GameObjects.Image
-  private fixer?:Phaser.GameObjects.Image
-  private fixerDust?:Phaser.GameObjects.Graphics
-  private fixerPauseUntil=0
-  private fixerBubble?:Tag
-  private fixerBubbleTimer?:Phaser.Time.TimerEvent
   private mascot?:ReturnType<typeof createLocalMascot>
   private jukebox?:Phaser.GameObjects.Image
   private jukeboxNotes:Phaser.GameObjects.Image[]=[]
@@ -167,14 +183,17 @@ class StoreScene extends Phaser.Scene {
   }
   private tag(x:number,y:number,value:string,size=TAG_FONT,wrap?:number){return new Tag(this,x,y,value,{size,wrap,resolution:this.zoom})}
   create(){
-    this.cameras.main.setZoom(this.zoom).centerOn(W/2,H/2).setBackgroundColor('#6e4a31')
+    this.cameras.main.setZoom(this.zoom).setBackgroundColor('#6e4a31')
     this.createTextures()
     // Room shell: walls, awning, sign board, kitchen nook, chalkboard frame and tiled floor.
     this.add.image(0,0,'room').setOrigin(0).setScale(PX).setDepth(0)
     // On screens wider than the room, a brick wall carries on either side, with a soft shadow at the room's edges.
     // Each side is 720 world units: enough for the widest view (MAX_VIEW_W).
-    for(const x of [-720,W])this.add.image(x,0,'brick-wall').setOrigin(0).setScale(PX).setDepth(0)
-    this.add.graphics().setDepth(0).fillStyle(0x2b1d16,.35).fillRect(-PX*2,0,PX*2,H).fillRect(W,0,PX*2,H)
+    // On the right, the deck and its view go on instead.
+    this.add.image(-720,0,'brick-wall').setOrigin(0).setScale(PX).setDepth(0)
+    this.add.graphics().setDepth(0).fillStyle(0x2b1d16,.35).fillRect(-PX*2,0,PX*2,H)
+    this.view=new TanawView(this,{doorway:DOORWAY,sceneWidth:W,lightDepth:LIGHT_DEPTH,skyMinute:this.opts.skyMinute,signX:404,landscape:'valley',reducedMotion:()=>Boolean(this.opts.reducedMotion),rainy:()=>false})
+    this.bins=sceneBins.store.map(bin=>{const image=this.sprite(bin.x,bin.y,'bin-idle',0);return image.setDepth(bin.y+image.displayHeight/2-14)})
     this.daylight=this.opts.daylight??currentDaylight()
     this.windowSky=this.add.graphics().setDepth(.5)
     this.drawWindowSky()
@@ -213,17 +232,12 @@ class StoreScene extends Phaser.Scene {
     this.jukeboxNotes=[0,1,2].map(()=>this.sprite(JUKEBOX.x,JUKEBOX.y,'music-note',640).setVisible(false))
     // Floor furniture: depth follows each object's base so visitors walk in front and behind.
     const floor=(x:number,y:number,name:string)=>{const image=this.sprite(x,y,name,0);image.setDepth(y+image.displayHeight/2-14);return image}
-    const board=floor(324,492,'feedback-board')
-    this.text(324,465,'FEEDBACK',8,'#5e3d27',board.depth+1)
-    this.text(324,509,'WRITE',8,'#5e3d27',board.depth+1)
+    const board=floor(324,500,'feedback-board')
+    this.text(324,473,'FEEDBACK',8,'#5e3d27',board.depth+1)
+    this.text(324,517,'WRITE',8,'#5e3d27',board.depth+1)
     this.adSign=floor(AD_SIGN.x,AD_SIGN.y,'ad-sign')
     this.text(AD_SIGN.x,AD_SIGN.y-30,'APPS',8,'#5e3d27',this.adSign.depth+1)
     this.text(AD_SIGN.x,AD_SIGN.y+18,'ASK US',8,'#5e3d27',this.adSign.depth+1)
-    // Tile-repair corner: a handyman taps a fresh tile into place beside his toolbox.
-    this.sprite(110,410,'repair-tile',1);this.sprite(136,418,'old-tile',2)
-    floor(54,410,'toolbox');floor(140,388,'cone')
-    this.fixer=floor(84,392,'fixer-rest')
-    this.fixerDust=this.add.graphics().setDepth(this.fixer.depth+1)
     // The dance floor lies flat on the tiles; visitors and cats can walk across it.
     this.danceFloor=this.sprite(DANCE_FLOOR.x,DANCE_FLOOR.y,'dance-floor-0',1)
     this.dancers=DANCERS.map(({id,x,y,mirror})=>({sprite:this.sprite(x,y,`dancer-${id}-up`,y+10).setFlipX(mirror),id,y,mirror,twirlUntil:0}))
@@ -263,6 +277,9 @@ class StoreScene extends Phaser.Scene {
     const sprite=this.sprite(180,510,this.opts.avatar,520)
     const label=this.tag(180,510-NAME_TAG_GAP,this.opts.nickname).setDepth(tagDepth(510))
     this.self={sprite,label,avatar:this.opts.avatar,phase:characterPhase(this.opts.nickname),movingUntil:0}
+    this.drinks=new HeldDrinks(this,this.bins,()=>Boolean(this.opts.reducedMotion))
+    this.fitCamera(this.opts.viewWidth??MIN_VIEW_W)
+    this.cameras.main.centerOn(sprite.x,H/2).startFollow(sprite,true,this.opts.reducedMotion?1:.12,1)
     if(this.mascot){
       for(const cat of this.mascot.snapshot(0).cats){
         const skin=CAT_SKINS[cat.name],roams=residentCats.find(resident=>resident.name===cat.name)?.roams!==false
@@ -285,7 +302,13 @@ class StoreScene extends Phaser.Scene {
       if(this.inputBlocked())return
       const x=pointer.worldX,y=pointer.worldY
       // Taps on the walls beside the room just walk toward that side.
+      // Out on the deck: the view (walk to the railing), the railing, a bench, the bin.
+      if(x>=DECK_LEFT&&y<RAIL_Y-8){this.tapFeedback(x,y);this.enjoyView();return}
       if(x<0||x>W){const p=closestPoint(x,y);this.tapFeedback(p.x,p.y);this.walkTo(p.x,p.y);return}
+      const deckSeats=this.deckSeatsAt(x,y)
+      if(deckSeats.length){this.tapFeedback(x,y);this.chooseSeat(deckSeats);return}
+      const bin=sceneBins.store.find(b=>Math.abs(x-b.x)<=18&&y>=b.y-26&&y<=b.y+16)
+      if(bin){this.tapFeedback(x,y);this.walkTo(bin.standX,bin.standY,()=>this.opts.onInteract('trash'));return}
       // The guide can cross the yarn's tile; keep its menu hit target reliable there.
       if(this.menuGuide&&Math.abs(x-this.menuGuide.sprite.x)<24&&Math.abs(y-this.menuGuide.sprite.y)<30){
         this.menuGuidePath=[];this.menuGuidePauseUntil=this.time.now+3500;this.menuGuide.sprite.setTint(0xffecc2);this.clearGuideBubble();this.tapFeedback(x,y);this.opts.onInteract('menu');return
@@ -298,8 +321,6 @@ class StoreScene extends Phaser.Scene {
       // The front-most cat wins when the two overlap.
       const tappedCat=[...this.cats].sort((a,b)=>b.sprite.y-a.sprite.y).find(({sprite})=>Math.abs(x-sprite.x)<27&&y>sprite.y-sprite.displayHeight-4&&y<sprite.y+4)
       if(tappedCat){this.tapFeedback(x,y);this.countCatTap(tappedCat);const result=this.petCat(tappedCat.name);if(result!=='petted')this.meow(tappedCat.name);return}
-      // Tapping the handyman makes him stop work and apologise for the renovation.
-      if(this.fixer&&Math.abs(x-this.fixer.x)<26&&Math.abs(y-this.fixer.y)<26){this.tapFeedback(x,y);this.fixerSpeak();return}
       // Tapping a dancer makes them twirl and cheer for the tapper.
       const tappedDancer=this.dancers.find(dancer=>Math.abs(x-dancer.sprite.x)<18&&Math.abs(y-dancer.y)<26)
       if(tappedDancer){this.tapFeedback(x,y);this.tapDancer(tappedDancer);return}
@@ -333,8 +354,6 @@ class StoreScene extends Phaser.Scene {
     this.texture('kitchen-counter',art.kitchenCounterArt());this.texture('order-counter',art.orderCounterArt())
     this.texture('register',art.registerArt());this.texture('clipboard',art.clipboardArt())
     this.texture('plant-small',art.smallPlantArt())
-    for(const frame of ['up','down','rest'] as const)this.texture(`fixer-${frame}`,art.fixerArt(frame))
-    this.texture('toolbox',art.toolboxArt());this.texture('cone',art.coneArt());this.texture('repair-tile',art.repairTileArt());this.texture('old-tile',art.oldTileArt())
     this.texture('feedback-board',art.feedbackBoardArt());this.texture('entrance',art.entranceArt())
     for(const time of ['day','dusk','night'] as const)for(const frame of [0,1,2,3] as const)this.texture(`store-door-${time}-${frame}`,art.insideDoorArt(frame,time))
     this.texture('ad-sign',art.adSignArt());this.texture('ad-sign-ping',art.adSignArt(true))
@@ -348,6 +367,7 @@ class StoreScene extends Phaser.Scene {
       this.texture('ghost',art.ghostArt());this.texture('candy',art.candyArt())
     }
     createReactionTextures(this)
+    createDrinkTextures(this);createDeckTextures(this,DOORWAY)
     if(this.mascot){
       for(const name of Object.keys(CAT_SKINS) as CatName[])for(const [frame,pose] of CAT_POSES)this.texture(`${CAT_SKINS[name]}-${frame}`,art.catArt(pose,art.CAT_COATS[name]))
       this.texture('yarn-ball',art.yarnArt());this.texture('yarn-ball-roll',art.yarnArt(true))
@@ -473,7 +493,7 @@ class StoreScene extends Phaser.Scene {
       if(this.time.now>=counterUntil){counter.setVisible(false);continue}
       // The tally is wider than a name tag, so keep it inside the room when the cat is near a wall.
       const half=counter.getBounds().width/2
-      counter.setPosition(Math.round(Math.max(half+4,Math.min(W-half-4,label.x))/PX)*PX,label.y-24);setDepthIfChanged(counter,label.depth+.5)
+      counter.setPosition(Math.round(Math.max(half+4,Math.min(ROOM_W-half-4,label.x))/PX)*PX,label.y-24);setDepthIfChanged(counter,label.depth+.5)
     }
   }
   // A small pixel heart floats above the two name tags while the cats snuggle. Redrawn only on a new frame.
@@ -526,15 +546,113 @@ class StoreScene extends Phaser.Scene {
     if(!value&&this.draggingYarn){const d=this.draggingYarn;this.draggingYarn=undefined;this.mascot?.release(d.lastX,d.lastY,0,0,this.time.now)}
     this.opts.controlsEnabled=value;this.resetMovement();if(value)this.menuGuide?.sprite.clearTint();if(this.input?.keyboard)this.input.keyboard.enabled=value
   }
-  setReducedMotion(value:boolean){this.opts.reducedMotion=value;this.cookingFrame=-2}
-  // The room stays centred however wide the view is.
+  setReducedMotion(value:boolean){this.opts.reducedMotion=value;this.cookingFrame=-2;this.view?.setReducedMotion();this.cameras.main.setLerp(value?1:.12,1)}
+  // Narrower than the room and its deck together, the camera follows the visitor between them; wider, both are in view.
+  private fitCamera(width:number){
+    const extra=Math.max(0,width-W)/2
+    this.cameras.main.setSize(width*this.zoom,H*this.zoom).setBounds(-extra,0,W+extra*2,H)
+  }
   setViewWidth(width:number){
     if(!this.sys?.isActive())return
     this.scale.setGameSize(width*this.zoom,H*this.zoom)
-    this.cameras.main.setSize(width*this.zoom,H*this.zoom).centerOn(W/2,H/2)
+    this.fitCamera(width)
+  }
+  // ---------- The deck: seats facing the view ----------
+  private seatTaken(seat:number){return [...this.remotes.values()].some(remote=>remote.pose==='sit'&&remote.seat===seat)}
+  // The seats a tap means, nearest first: a bench's two, or the railing's five.
+  private deckSeatsAt(x:number,y:number){
+    const byDistance=(seats:number[])=>[...seats].sort((a,b)=>Math.abs(DECK_SEATS[a]!.x-x)-Math.abs(DECK_SEATS[b]!.x-x))
+    const bench=DECK_BENCH_SEATS.find(b=>Math.abs(x-b.x)<=40&&y>=366&&y<=412)
+    if(bench)return byDistance(bench.seats)
+    return x>=DECK_LEFT&&x<=W&&y>=RAIL_Y-8&&y<=RAIL_Y+24?byDistance(RAIL_SEATS):[]
+  }
+  private chooseSeat(seats:number[]){
+    const free=seats.find(seat=>!this.seatTaken(seat))
+    if(free===undefined){this.say(seats.length>2?'Puno ang railing! Try a bench.':'Occupied na! Try another spot.');return}
+    if(this.self?.pose==='sit'&&this.self.seat===free)return
+    const spot=DECK_SEATS[free]!
+    this.walkTo(spot.x,spot.y,()=>this.sit(free))
+  }
+  private sit(seat:number){
+    const self=this.self,spot=DECK_SEATS[seat]
+    if(!self||!spot)return
+    if(this.seatTaken(seat)){this.say('Someone is there!');return}
+    self.sprite.setPosition(spot.x,spot.y)
+    // Send the final floor position first so the server never reads a late move as standing up.
+    if(Math.hypot(self.sprite.x-this.lastX,self.sprite.y-this.lastY)>.5){this.lastMove=this.time.now;this.lastX=spot.x;this.lastY=spot.y;this.opts.onMove(spot.x,spot.y)}
+    self.pose='sit';self.seat=seat;self.sitSince=this.time.now
+    this.opts.onPose('sit',seat)
+    this.time.delayedCall(600,()=>{if(self.pose==='sit'&&self.seat===seat)this.thinkAboutView(true)})
+  }
+  standUp(notify=true){
+    const self=this.self
+    if(!self||self.pose!=='sit')return
+    self.pose='stand';self.seat=undefined
+    if(notify)this.opts.onPose('stand')
+  }
+  // The page's View button, or a tap on the view: the nearest free spot at the railing (or a bench).
+  enjoyView(){
+    const self=this.self
+    if(!self||this.inputBlocked())return
+    if(self.pose==='sit'){this.thinkAboutView(true);return}
+    const distance=(i:number)=>Math.hypot(DECK_SEATS[i]!.x-self.sprite.x,DECK_SEATS[i]!.y-self.sprite.y)
+    const nearest=(seats:number[])=>seats.filter(i=>!this.seatTaken(i)).sort((a,b)=>distance(a)-distance(b))[0]
+    const free=nearest(RAIL_SEATS)??nearest(BENCH_SEATS)
+    if(free===undefined){this.say('Puno ang deck ngayon! Balik ka mamaya.');return}
+    const spot=DECK_SEATS[free]!
+    this.walkTo(spot.x,spot.y,()=>this.sit(free))
+  }
+  setPose(id:string,pose:Pose,seat?:number){
+    if(id===this.selfId){if(pose==='stand'&&this.self?.pose==='sit'){this.standUp(false);this.say('Someone is there!')}return}
+    const remote=this.remotes.get(id)
+    if(!remote)return
+    if(pose==='sit'){
+      const spot=seat===undefined?undefined:DECK_SEATS[seat]
+      this.tweens.killTweensOf(remote.sprite)
+      if(spot)remote.sprite.setPosition(spot.x,spot.y)
+      remote.pose='sit';remote.seat=seat;remote.sitSince=this.time.now
+    }else{remote.pose='stand';remote.seat=undefined}
+    this.placeVisitor(remote)
+  }
+  // A thought about the view (only this visitor sees it), at most every 45 seconds unless they just settled.
+  private thinkAboutView(settled=false){
+    if(!this.view||(!settled&&this.time.now<this.nextViewThought))return
+    this.nextViewThought=this.time.now+45_000
+    this.say(this.view.thought())
+  }
+  private say(text:string){
+    const self=this.self
+    if(!self)return
+    this.noticeTimer?.remove(false);this.notice?.destroy()
+    const top=self.sprite.y-(self.sprite.originY-.5)*self.sprite.displayHeight,bubble=this.tag(self.sprite.x,top-BUBBLE_GAP,text,TAG_FONT,140).setDepth(900)
+    this.notice=bubble
+    this.noticeTimer=this.time.delayedCall(3200,()=>{if(this.notice===bubble)this.notice=undefined;bubble.destroy();this.noticeTimer=undefined})
+  }
+  // Name tag over the drawn top (a bench lifts its sitter); a bench's sitter is drawn under its backrest.
+  private placeVisitor(visitor:VisitorCharacter){
+    const {sprite,label}=visitor,top=visitor.pose==='sit'?sprite.y-(sprite.originY-.5)*sprite.displayHeight:sprite.y
+    if(label.x!==sprite.x||label.y!==top-NAME_TAG_GAP)label.setPosition(sprite.x,top-NAME_TAG_GAP)
+    const bench=visitor.pose==='sit'&&visitor.seat!==undefined&&DECK_SEATS[visitor.seat]?.kind==='bench'
+    setDepthIfChanged(sprite,bench?sprite.y:sprite.y+10);setDepthIfChanged(label,tagDepth(sprite.y))
+  }
+  // Leaning on the railing, or sitting on a bench (a small hop up onto it), seen from behind.
+  private animateSeated(visitor:VisitorCharacter){
+    const {sprite,avatar}=visitor,seat=visitor.seat===undefined?undefined:DECK_SEATS[visitor.seat],motion=!this.opts.reducedMotion
+    let texture=`${avatar}-lean`,lift=0
+    if(seat?.kind==='bench'){
+      const progress=motion?Math.min(1,(this.time.now-(visitor.sitSince??-Infinity))/SIT_MS):1
+      lift=Math.round((seat.lift*progress+Math.sin(progress*Math.PI)*6)/PX)*PX
+      texture=progress<.5?avatar:`${avatar}-back-sit`
+    }
+    if(!this.textures.exists(texture))texture=avatar
+    if(sprite.texture.key!==texture)sprite.setTexture(texture)
+    if(sprite.flipX)sprite.setFlipX(false)
+    sprite.setOrigin(.5,.5+lift/sprite.displayHeight)
+    this.placeVisitor(visitor)
   }
   // Frame swaps and whole-pixel lifts only: pixel art is never rotated or squashed.
   private animateCharacter(character:Character,moving:boolean){
+    if((character as VisitorCharacter).pose==='sit'){this.animateSeated(character as VisitorCharacter);return}
     const {sprite,avatar,phase}=character
     // Standing still on the dance floor joins the performers' routine; walking across it doesn't.
     const onFloor=onDanceFloor(sprite.x,sprite.y+20),dancing=onFloor&&!moving&&this.textures.exists(`${avatar}-dance-up`)
@@ -618,27 +736,6 @@ class StoreScene extends Phaser.Scene {
         fx.fillStyle(0xffffff,Math.max(0,.75-rise/24)).fillRect(120+i*6,156-rise,PX,4)
       }
     }else fx.fillStyle(0xffffff,.6).fillRect(122,154,PX,4).fillRect(132,150,PX,4)
-  }
-  private fixerSpeak(){
-    const fixer=this.fixer
-    if(!fixer)return
-    this.fixerBubbleTimer?.remove(false)
-    this.fixerBubble?.destroy()
-    const bubble=this.tag(fixer.x,fixer.y-26,'Sorry for the inconvenience! We have an ongoing renovation.',TAG_FONT,150).setDepth(900)
-    this.fixerBubble=bubble
-    this.fixerPauseUntil=this.time.now+4000
-    this.fixerBubbleTimer=this.time.delayedCall(4000,()=>{if(this.fixerBubble===bubble)this.fixerBubble=undefined;bubble.destroy();this.fixerBubbleTimer=undefined})
-  }
-  // Four quick hammer taps, then a pause to check the tile. Textures change only on a new frame.
-  private updateFixer(){
-    const fixer=this.fixer,dust=this.fixerDust
-    if(!fixer||!dust)return
-    const now=this.time.now,cycle=now%3400
-    const frame=!this.opts.reducedMotion&&now>=this.fixerPauseUntil&&cycle<1600?(Math.floor(cycle/200)%2?'down':'up'):'rest'
-    if(fixer.texture.key===`fixer-${frame}`)return
-    fixer.setTexture(`fixer-${frame}`)
-    dust.clear()
-    if(frame==='down')dust.fillStyle(0xfff8ea,.85).fillRect(100,402,PX,PX).fillRect(114,400,PX,PX).fillRect(108,396,PX,PX)
   }
   setJukebox(state:JukeboxScene){this.jukeboxState=state}
   // Lights chase and the record's shine turns while a song is on; idle is one still frame.
@@ -789,11 +886,12 @@ class StoreScene extends Phaser.Scene {
   }
   override update(_:number,delta:number){
     this.updateMascot(delta)
-    this.updateFixer()
+    this.drinks?.update()
     this.updateJukebox()
     this.updateHalloween()
     this.updateDancers()
     this.updateAdSign()
+    this.view?.update()
     for(const character of this.staff)this.animateCharacter(character,false)
     this.updateChefCooking()
     for(const character of this.remotes.values())this.animateCharacter(character,this.time.now<character.movingUntil)
@@ -808,19 +906,25 @@ class StoreScene extends Phaser.Scene {
       vy+=(k.W?.isDown||k.UP?.isDown?-1:0)+(k.S?.isDown||k.DOWN?.isDown?1:0)
     }
     this.checkDoorPush(vy,delta)
+    // Any movement gets a visitor off the bench or the railing first.
+    if(this.self.pose==='sit'&&(vx||vy||this.path.length))this.standUp()
     if(!vx&&!vy&&this.path.length){
       const p=this.path[0]!,diff=new Phaser.Math.Vector2(p.x-sprite.x,p.y-sprite.y)
       if(diff.length()<4){sprite.setPosition(p.x,p.y);this.path.shift();if(!this.path.length){const action=this.afterPath;this.afterPath=undefined;action?.()}}else{diff.normalize();vx=diff.x;vy=diff.y}
     }
     const length=Math.hypot(vx,vy)
-    if(length){vx/=length;vy/=length;const s=Math.min(delta/1000,.05)*115
+    if(length&&this.self.pose!=='sit'){vx/=length;vy/=length;const s=Math.min(delta/1000,.05)*115
       if(bounded(sprite.x+vx*s,sprite.y))sprite.x+=vx*s
       if(bounded(sprite.x,sprite.y+vy*s))sprite.y+=vy*s
     }
     this.animateCharacter(this.self,Math.hypot(sprite.x-previousX,sprite.y-previousY)>.1)
-    this.self.label.setPosition(sprite.x,sprite.y-NAME_TAG_GAP)
+    if(this.self.pose!=='sit')this.self.label.setPosition(sprite.x,sprite.y-NAME_TAG_GAP)
     this.positionBubble(this.selfBubble,sprite)
-    setDepthIfChanged(sprite,sprite.y+10);setDepthIfChanged(this.self.label,tagDepth(sprite.y))
+    if(this.self.pose==='sit')this.placeVisitor(this.self);else{setDepthIfChanged(sprite,sprite.y+10);setDepthIfChanged(this.self.label,tagDepth(sprite.y))}
+    // Stepping out onto the deck now and then brings a thought about the view.
+    const onDeck=sprite.x>=DECK_LEFT
+    if(onDeck&&!this.onDeck)this.thinkAboutView()
+    this.onDeck=onDeck
     if(this.time.now-this.lastMove>90&&Math.hypot(sprite.x-this.lastX,sprite.y-this.lastY)>1){
       this.lastMove=this.time.now;this.lastX=sprite.x;this.lastY=sprite.y;this.opts.onMove(Math.round(sprite.x),Math.round(sprite.y))
     }
@@ -886,13 +990,13 @@ class StoreScene extends Phaser.Scene {
   setPlayers(players:Player[],selfId:string){
     if(selfId!==this.selfId&&this.self){
       const own=players.find(p=>p.id===selfId)
-      if(own){this.self.sprite.setPosition(own.x,own.y);this.lastX=own.x;this.lastY=own.y;this.path=[];this.afterPath=undefined}
+      if(own){this.standUp(false);this.self.sprite.setPosition(own.x,own.y);this.lastX=own.x;this.lastY=own.y;this.path=[];this.afterPath=undefined}
     }
     this.selfId=selfId
     // A visitor can change their name mid-visit (see /api/me/nickname); the next list carries it to every name tag.
     for(const p of players){const visitor=p.id===selfId?this.self:this.remotes.get(p.id);if(visitor&&visitor.label.text!==p.nickname){visitor.label.setText(p.nickname);}}
     const incoming=new Set(players.filter(p=>p.id!==selfId).map(p=>p.id))
-    for(const [id,p] of this.remotes)if(!incoming.has(id)){p.sprite.destroy();p.label.destroy();p.bubble?.destroy();this.remotes.delete(id)}
+    for(const [id,p] of this.remotes)if(!incoming.has(id)){p.sprite.destroy();p.label.destroy();p.bubble?.destroy();this.drinks?.remove(p.sprite);this.remotes.delete(id)}
     for(const p of players){if(p.id===selfId)continue
       let remote=this.remotes.get(p.id)
       if(!remote){
@@ -900,12 +1004,24 @@ class StoreScene extends Phaser.Scene {
         remote={sprite:this.sprite(p.x,p.y,avatar,p.y+10),label:this.tag(p.x,p.y-NAME_TAG_GAP,p.nickname).setDepth(tagDepth(p.y)),avatar,phase:characterPhase(p.id),movingUntil:0}
         this.remotes.set(p.id,remote)
       }
-      this.movePlayer(p.id,p.x,p.y)
+      // Someone already on a bench or at the railing is drawn there, without the hop.
+      if(p.pose==='sit'&&remote.pose!=='sit'){this.tweens.killTweensOf(remote.sprite);remote.sprite.setPosition(p.x,p.y);remote.pose='sit';remote.seat=p.seat;remote.sitSince=-Infinity}
+      else if(p.pose!=='sit')this.movePlayer(p.id,p.x,p.y)
     }
+    for(const p of players){const visitor=p.id===selfId?this.self:this.remotes.get(p.id);if(visitor)this.drinks?.set(visitor.sprite,isHeldDrink(p.drink)?p.drink:null)}
+  }
+  setDrink(id:string,drink:HeldDrink|null){const visitor=id===this.selfId?this.self:this.remotes.get(id);if(visitor)this.drinks?.set(visitor.sprite,drink)}
+  playAction(id:string,action:CafeAction){const remote=this.remotes.get(id);if(remote&&action==='sip')this.drinks?.sip(remote.sprite)}
+  sip(){
+    if(!this.self||!this.drinks?.sip(this.self.sprite))return false
+    this.opts.onAct('sip')
+    return true
   }
   movePlayer(id:string,x:number,y:number){
     const remote=this.remotes.get(id)
-    if(!remote||Math.hypot(x-remote.sprite.x,y-remote.sprite.y)<=.5)return
+    if(!remote)return
+    if(remote.pose==='sit'){remote.pose='stand';remote.seat=undefined}
+    if(Math.hypot(x-remote.sprite.x,y-remote.sprite.y)<=.5)return
     remote.movingUntil=this.time.now+200
     this.tweens.killTweensOf(remote.sprite)
     this.tweens.add({targets:remote.sprite,x,y,duration:115,onUpdate:()=>{
@@ -960,5 +1076,7 @@ export function createGame(el:HTMLElement,opts:Options):StoreGame{
   const scene=new StoreScene({...opts,zoom}),viewW=opts.viewWidth??MIN_VIEW_W
   const game=new Phaser.Game({type:Phaser.AUTO,parent:el,width:viewW*zoom,height:H*zoom,backgroundColor:'#6e4a31',pixelArt:true,
     scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_HORIZONTALLY,width:viewW*zoom,height:H*zoom},scene:[scene],render:{antialias:false}})
-  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(scene.sys?.isActive())scene.movePlayer(id,x,y)},tossYarn:()=>scene.sys?.isActive()?scene.tossYarn():false,petCat:()=>scene.sys?.isActive()?scene.petCat():'busy',showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value),exitScene:()=>scene.sys?.isActive()?scene.exitScene():Promise.resolve(),cancelExit:()=>{if(scene.sys?.isActive())scene.cancelExit()},setViewWidth:width=>scene.setViewWidth(width),setJukebox:state=>scene.setJukebox(state),setMenuItems:items=>scene.setMenuItems(items),setCatTaps:taps=>scene.setCatTaps(taps)}
+  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(scene.sys?.isActive())scene.movePlayer(id,x,y)},tossYarn:()=>scene.sys?.isActive()?scene.tossYarn():false,petCat:()=>scene.sys?.isActive()?scene.petCat():'busy',showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value),exitScene:()=>scene.sys?.isActive()?scene.exitScene():Promise.resolve(),cancelExit:()=>{if(scene.sys?.isActive())scene.cancelExit()},setViewWidth:width=>scene.setViewWidth(width),setJukebox:state=>scene.setJukebox(state),setMenuItems:items=>scene.setMenuItems(items),setCatTaps:taps=>scene.setCatTaps(taps),
+    setDrink:(id,drink)=>{if(scene.sys?.isActive())scene.setDrink(id,drink)},playAction:(id,action)=>{if(scene.sys?.isActive())scene.playAction(id,action)},sip:()=>Boolean(scene.sys?.isActive())&&scene.sip(),
+    setPose:(id,pose,seat)=>{if(scene.sys?.isActive())scene.setPose(id,pose,seat)},enjoyView:()=>{if(scene.sys?.isActive())scene.enjoyView()},standUp:()=>{if(scene.sys?.isActive())scene.standUp()}}
 }

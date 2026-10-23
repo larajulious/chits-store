@@ -1,5 +1,6 @@
 import Phaser from 'phaser'
 import type {Pose,SceneId} from '../shared/world'
+import type {CafeAction,HeldDrink} from '../shared/cafe'
 import type {OrderStatus} from '../shared/order-status'
 import {reactionOptions} from '../shared/reactions'
 import * as art from './pixelArt'
@@ -14,7 +15,10 @@ export type WorldGame = {game:Phaser.Game;setDirection:(x:number,y:number)=>void
   // The move was refused or timed out: close the door and fade back in.
   cancelExit:()=>void;
   // The stage changed shape: show this many world units across (see viewWidthFor).
-  setViewWidth:(width:number)=>void}
+  setViewWidth:(width:number)=>void;
+  // Drinks in hand travel to every scene: show a visitor's drink (null: thrown in a bin), play their sip or other
+  // action, and sip your own (false when there is nothing to sip).
+  setDrink:(id:string,drink:HeldDrink|null)=>void;playAction:(id:string,action:CafeAction)=>void;sip:()=>boolean}
 export const PX=art.ART_SCALE
 export {MAX_VIEW_W,MIN_VIEW_W,VIEW_H} from '../shared/world'
 export const FONT='Silkscreen, monospace'

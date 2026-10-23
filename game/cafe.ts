@@ -1,24 +1,25 @@
 import Phaser from 'phaser'
 import {avatarOptions,type AvatarId} from '../shared/avatars'
-import {CAFE_RESTROOM_SEAT,RESTROOM_MS,cafeSeats,scenes,type Pose} from '../shared/world'
-import {drinkOptions,isDrink,type CafeAction,type CafeMood,type DrinkId} from '../shared/cafe'
+import {CAFE_RESTROOM_SEAT,RESTROOM_MS,cafeSeats,sceneBins,scenes,type Pose} from '../shared/world'
+import {binNear,createDrinkTextures,tossIntoBin} from './heldDrink'
+import {HOLDING_ALREADY,drinkOptions,isHeldDrink,type CafeAction,type CafeMood,type DrinkId,type HeldDrink} from '../shared/cafe'
 import * as art from './pixelArt'
 import * as cafe from './cafeArt'
 import * as deck from './deckArt'
-import {bigPotArt,glowArt,lightPoolArt,sittingVisitorArt} from './neighborhoodArt'
-import {manilaMinute,mixColor,moonArc,skyAt,skyPhase,sunArc,volcanoSmoke,type Sky,type SkyPhase} from './scenery'
+import {bigPotArt,glowArt,sittingVisitorArt} from './neighborhoodArt'
+import {DECK_BENCHES,DECK_LEFT,RAIL_Y,TanawView,createDeckTextures,deckObstacles} from './tanawView'
 import {BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,MIN_VIEW_W,NAME_TAG_GAP,PX,TAG_FONT,Tag,addTexture,characterPhase,createReactionTextures,currentDaylight,drawRain,findPath,reactionTexture,setDepthIfChanged,slideDoor,tagDepth,tapSparks,visitorFrame,type Daylight,type Player,type WorldGame} from './common'
 
 // Kape & Chits: the 24/7 coffee tambayan next to the store, its own Phaser game like the street.
 // Everyone inside shares one room, the café and the Tanaw Deck beside it: positions, seats, drinks and actions come through the server.
-export type CafeGame = WorldGame & {setPose:(id:string,pose:Pose,seat?:number)=>void;setDrink:(id:string,drink:DrinkId|null)=>void;playAction:(id:string,action:CafeAction)=>void;
+export type CafeGame = WorldGame & {setPose:(id:string,pose:Pose,seat?:number)=>void;
   orderDrink:(drink:DrinkId,surprise?:boolean)=>void;act:(action:CafeAction)=>void;standUp:()=>void;setMusic:(mood:CafeMood|null)=>void;enjoyView:()=>void}
 // skyMinute: a fixed time of day for the deck's sky (the page's ?time= preview); otherwise the store's Manila clock.
 type Options = {nickname:string;avatar:AvatarId;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onPose:(pose:Pose,seat?:number)=>void;
   onDrink:(drink:DrinkId)=>void;onAct:(action:CafeAction)=>void;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;daylight?:Daylight;skyMinute?:number;viewWidth?:number}
 // lift: how far the art is drawn above the network position. The *Until times drive short, local animations.
 type Visitor = {sprite:Phaser.GameObjects.Image;label:Tag;avatar:string;name:string;phase:number;movingUntil:number;bubble?:Tag|Phaser.GameObjects.Image;pose:Pose;seat?:number;sitSince:number;lift:number;
-  drink?:DrinkId;cup?:Phaser.GameObjects.Image;umbrella?:Phaser.GameObjects.Image;sipUntil:number;
+  drink?:HeldDrink;cup?:Phaser.GameObjects.Image;umbrella?:Phaser.GameObjects.Image;sipUntil:number;
   // 0..1: how far into the CR (out of sight) the visitor is.
   hidden:number;relaxUntil:number;laughUntil:number;waveUntil:number}
 
@@ -45,24 +46,18 @@ const PLANT={x:36,y:516}
 // The CR's door in the front wall, left of the entrance; its spot on the floor is seat CAFE_RESTROOM_SEAT.
 const CR={x:80,y:564,area:new Phaser.Geom.Rectangle(42,538,76,42)}
 const CR_LINES=['Ahh, ginhawa!','Ayan, okay na.','Balik tambay!','Hugas kamay, check!']
-// The Tanaw Deck: the view above the railing (world y below RAIL_Y), two benches facing it, pots in the front corners,
-// and a string of lights between two posts at the railing's ends.
-const DECK_LEFT=372,RAIL_Y=300
-const BENCHES=[{x:460,seats:[8,9]},{x:620,seats:[10,11]}]
-const DECK_POTS=[{x:392,y:520},{x:688,y:520}]
+// The Tanaw Deck beside the café (see tanawView.ts): its doorway in the wall, and the benches' seats.
+const DOORWAY={top:372,bottom:452}
+const BENCHES=DECK_BENCHES.map((x,i)=>({x,seats:[8+i*2,9+i*2]}))
 // In the rainy mood, patio umbrellas open over each bench and the deck's table (TABLES[DECK_TABLE]).
 const DECK_TABLE=3,PATIO_UMBRELLAS=[...BENCHES.map(b=>({x:b.x,y:392})),{x:540,y:496}]
-const WIRE={x0:382,x1:706,y:232,sag:22}
-const wireY=(x:number)=>WIRE.y+Math.round(Math.sin((x-WIRE.x0)/(WIRE.x1-WIRE.x0)*Math.PI)*WIRE.sag/PX)*PX
-const DECK_BULBS=Array.from({length:12},(_,i)=>{const x=WIRE.x0+18+i*26;return {x,y:wireY(x)+4}})
-// Thirty fixed stars over the whole view, brightest few first.
-const STARS=Array.from({length:30},(_,i)=>({x:Math.round((DECK_LEFT+((i*137)%880))/PX)*PX,y:Math.round((8+((i*61)%140))/PX)*PX,bright:i<6}))
-// Footprints: tables, sofa, jukebox, plant; the café/deck wall (open at the doorway), the railing, the benches and the deck's pots.
+// Footprints: tables, sofa, jukebox, plant; the café/deck wall (open at the doorway), the railing, the benches, the deck's
+// pots, and the two garbage bins (one by the jukebox, one on the deck).
 const obstacles=[
   ...TABLES.map(t=>({x:t.x-36,y:t.y+8,w:72,h:24})),
   {x:224,y:256,w:112,h:16},{x:300,y:490,w:44,h:28},{x:20,y:504,w:34,h:30},
-  {x:344,y:250,w:32,h:deck.DOORWAY.top+7-250},{x:344,y:deck.DOORWAY.bottom-2,w:32,h:110},{x:376,y:250,w:344,h:RAIL_Y-251},
-  ...BENCHES.map(b=>({x:b.x-40,y:378,w:80,h:20})),...DECK_POTS.map(p=>({x:p.x-16,y:p.y-12,w:34,h:30})),
+  ...deckObstacles(DOORWAY),
+  ...sceneBins.cafe.map(bin=>({x:bin.x-12,y:bin.y-10,w:24,h:18})),
 ].map(box=>new Phaser.Geom.Rectangle(box.x,box.y,box.w,box.h))
 function bounded(x:number,y:number){return x>=floor.minX&&x<=floor.maxX&&y>=floor.minY&&y<=floor.maxY&&!obstacles.some(r=>r.contains(x,y))}
 function nearestOpen(x:number,y:number){
@@ -82,43 +77,9 @@ const BARISTA_WELCOME=['Pasok po! Welcome sa Kape & Chits!','Uy, welcome! Kape t
 const BARISTA_HELLO=['Welcome, {name}!','Hi {name}! Kape?','Uy {name}, upo ka!']
 const BARISTA_NEAR=['Hi! Tap me for a free kape.','Kape? Libre lang!']
 const WINDOW_LINES:Record<Daylight,string[]>={day:['Ang ganda ng araw!','Sunny outside. Iced coffee weather!'],dusk:['Ang ganda ng sunset...','Golden hour na!'],night:['Gabi na, pero bukas pa kami!','Ang tahimik ng gabi.']}
-const HOT_DRINKS=new Set<DrinkId>(['hot-latte','cappuccino','hot-chocolate'])
+const HOT_DRINKS=new Set<HeldDrink>(['hot-latte','cappuccino','hot-chocolate'])
 // Lights and window: added light depth, below name tags; the window paints just above the room art.
 const LIGHT_DEPTH=592,BULB_GLOW:Record<Daylight,number>={day:.35,dusk:.7,night:.95}
-// Little thoughts a visitor has out on the deck, for the time of day. Only they see them.
-const VIEW_LINES:Record<SkyPhase,string[]>={
-  morning:['Ang fresh ng hangin ngayong umaga.','Kape at hamog sa umaga. Perfect.','Ang ganda ng view.'],
-  afternoon:['Ang ganda ng view.','Perfect tambayan spot.','Sarap tumambay dito.'],
-  sunset:['Sunset hits different here.','Golden hour na! Ang ganda.','Sarap tumambay dito.'],
-  night:['Ang calming ng moonlight tonight.','Ang ganda ng buwan ngayong gabi.','Tahimik. Sarap tumambay dito.'],
-}
-const RAIN_LINES=['Umuulan! Sarap magkape.','Ulan, kape at kwentuhan. Perfect.','Ang lamig ng hangin sa ulan.']
-const SMOKE_LINES=['Uy, may usok ang bulkan. Ang ganda tingnan.','Nag-steam na naman ang bulkan.']
-// The notch of the island's crater (world units): where the plume rises from, just inside it so the island hides its base.
-const CRATER={x:561,y:234}
-// The view's layers, back to front, all below the deck floor and the room art's furniture.
-const SKY_DEPTH={sky:.1,stars:.12,glow:.14,sun:.15,cloud:.2,far:.3,lake:.35,smoke:.38,island:.4,near:.45,lights:.5,floor:.9,shade:.95,wall:1}
-
-// A grey texture painted in one colour, like a tint. Painting the pixels looks the same in WebGL and in Phaser's Canvas
-// renderer (which low-end devices fall back to, and which ignores tints), and only happens when the colour changes.
-class PaintedTexture{
-  private source:Uint8ClampedArray
-  private texture:Phaser.Textures.CanvasTexture
-  private color=-1
-  constructor(scene:Phaser.Scene,readonly key:string,pixels:art.PixelArt){
-    this.source=pixels.toCanvas().getContext('2d')!.getImageData(0,0,pixels.width,pixels.height).data
-    this.texture=scene.textures.createCanvas(key,pixels.width,pixels.height)!
-  }
-  paint(color:number){
-    if(color===this.color)return
-    this.color=color
-    const {context,width,height}=this.texture,image=context.createImageData(width,height),source=this.source,data=image.data
-    const r=(color>>16&255)/255,g=(color>>8&255)/255,b=(color&255)/255
-    for(let i=0;i<source.length;i+=4){data[i]=source[i]!*r;data[i+1]=source[i+1]!*g;data[i+2]=source[i+2]!*b;data[i+3]=source[i+3]!}
-    context.putImageData(image,0,0);this.texture.refresh()
-  }
-}
-
 class CafeScene extends Phaser.Scene{
   private opts:Options
   private zoom:number
@@ -161,30 +122,11 @@ class CafeScene extends Phaser.Scene{
   private notice?:Tag
   private noticeTimer?:Phaser.Time.TimerEvent
   private hasPlayers=false
-  // The Tanaw Deck's sky and lights, redrawn when the time of day moves on.
-  private sky:Sky=skyAt(0)
-  private skyKey=''
-  private phase:SkyPhase='night'
-  private skyGfx?:Phaser.GameObjects.Graphics
-  private starGfx?:Phaser.GameObjects.Graphics
-  private lakeFx?:Phaser.GameObjects.Graphics
-  private rainFx?:Phaser.GameObjects.Graphics
-  private rainFrame=-2
-  private deckShade?:Phaser.GameObjects.Graphics
-  private wire?:Phaser.GameObjects.Graphics
-  private fxFrame=-2
-  private smokeGfx?:Phaser.GameObjects.Graphics
-  private smokeKey=-2
-  private sun?:{body:Phaser.GameObjects.Image;glow:Phaser.GameObjects.Image}
-  private moon?:{body:Phaser.GameObjects.Image;glow:Phaser.GameObjects.Image}
-  private clouds:{image:Phaser.GameObjects.Image;speed:number;offset:number}[]=[]
-  // Each view texture with the sky colour it is painted in.
-  private painted:{texture:PaintedTexture;color:(sky:Sky)=>number}[]=[]
-  private deckBulbs:Phaser.GameObjects.Image[]=[]
-  private deckPools:Phaser.GameObjects.Image[]=[]
-  private doorwayGlow?:Phaser.GameObjects.Image
   private patioUmbrellas:Phaser.GameObjects.Image[]=[]
   private crDoor?:Phaser.GameObjects.Image
+  private bins:Phaser.GameObjects.Image[]=[]
+  // The view beside the café (sky, mountains, lights; see tanawView.ts), and whether this visitor is out on the deck.
+  private view?:TanawView
   private onDeck=false
   private nextViewThought=0
   constructor(opts:Options){super('Cafe');this.opts=opts;this.zoom=opts.zoom??1}
@@ -223,6 +165,7 @@ class CafeScene extends Phaser.Scene{
     SEATS.forEach(seat=>{if(seat.table!==undefined)this.sprite(seat.x,seat.y-12,'cafe-chair',seat.y-1)})
     TABLES.forEach(table=>this.sprite(table.x,table.y,`cafe-table-${table.variant}`,table.y+20))
     this.floorSprite(PLANT.x,PLANT.y,'big-pot')
+    this.bins=sceneBins.cafe.map(bin=>this.floorSprite(bin.x,bin.y,'bin-idle'))
     this.sprite(212,250,'plant-small',262)
     this.jukebox=this.floorSprite(JUKEBOX.x,JUKEBOX.y,'jukebox-idle')
     this.notes=[0,1,2].map(()=>this.sprite(JUKEBOX.x,JUKEBOX.y,'music-note',640).setVisible(false))
@@ -261,154 +204,17 @@ class CafeScene extends Phaser.Scene{
     return {sprite,label:this.tag(sprite.x,sprite.y-NAME_TAG_GAP,name).setDepth(tagDepth(sprite.y)),avatar,name,phase,movingUntil:0,pose:'stand',sitSince:-Infinity,lift:0,sipUntil:0,relaxUntil:0,laughUntil:0,waveUntil:0,hidden:0}
   }
   // ---------- The Tanaw Deck ----------
-  // Sky and lake (one Graphics), sun and moon, clouds, then the far ridge, the island and the near hills, tinted for the hour.
+  // The view and the deck's furniture (see tanawView.ts); rain falls there while the jukebox plays the rainy mood.
   private createDeck(){
-    const D=SKY_DEPTH,image=(x:number,y:number,name:string,depth:number,originY=0)=>this.add.image(x,y,name).setOrigin(0,originY).setScale(PX).setDepth(depth)
-    const paint=(key:string,pixels:art.PixelArt,color:(sky:Sky)=>number)=>this.painted.push({texture:new PaintedTexture(this,key,pixels),color})
-    paint('ridge-far',deck.farRidgeArt(),sky=>sky.far);paint('taal',deck.islandArt(),sky=>sky.island)
-    paint('hills-near',deck.nearHillsArt(),sky=>sky.near);paint('hillside',deck.hillsideArt(),sky=>sky.near)
-    paint('deck-sun',deck.sunArt(),sky=>mixColor(0xffffff,sky.glow,.5));paint('sky-glow',glowArt(18,'#ffffff'),sky=>sky.glow);paint('doorway-glow',glowArt(26,'#ffffff'),sky=>sky.glow)
-    paint('deck-cloud',deck.cloudArt(),sky=>sky.dark>.3?mixColor(sky.mid,0xffffff,.25):mixColor(0xffffff,sky.horizon,.3))
-    this.skyGfx=this.add.graphics().setDepth(D.sky)
-    this.starGfx=this.add.graphics().setDepth(D.stars)
-    const orb=(name:string)=>({glow:this.sprite(0,0,'sky-glow',D.glow).setBlendMode(Phaser.BlendModes.ADD),body:this.sprite(0,0,name,D.sun)})
-    this.sun=orb('deck-sun');this.moon=orb('deck-moon')
-    this.clouds=[{y:44,speed:3,offset:120},{y:96,speed:2,offset:560}].map(c=>({image:this.sprite(0,c.y,'deck-cloud',D.cloud),speed:c.speed,offset:c.offset}))
-    this.lakeFx=this.add.graphics().setDepth(D.lake)
-    this.smokeGfx=this.add.graphics().setDepth(D.smoke)
-    image(deck.VIEW_LEFT,210,'ridge-far',D.far,1)
-    this.add.image(556,252,'taal').setOrigin(.5,1).setScale(PX).setDepth(D.island)
-    image(deck.VIEW_LEFT,316,'hills-near',D.near,1);image(W,290,'hillside',D.near)
-    image(360,RAIL_Y,'deck-floor',D.floor)
-    this.deckShade=this.add.graphics().setDepth(D.shade)
-    image(356,0,'deck-wall',D.wall)
-    this.sprite(364,358,'deck-sign',2);this.text(364,363,'VIEW DECK',8,'#fff0d2',3)
-    // String lights between two posts at the railing's ends, with a soft pool of light under each post after dark.
-    for(const x of [WIRE.x0-2,WIRE.x1+2])this.add.image(x,RAIL_Y+22,'deck-post').setOrigin(.5,1).setScale(PX).setDepth(D.lights)
-    this.wire=this.add.graphics().setDepth(D.lights)
-    this.deckBulbs=DECK_BULBS.map(bulb=>this.sprite(bulb.x,bulb.y,'bulb-glow',D.lights).setBlendMode(Phaser.BlendModes.ADD))
-    this.deckPools=[WIRE.x0+20,WIRE.x1-20].map(x=>this.sprite(x,RAIL_Y+40,'light-pool',D.shade).setBlendMode(Phaser.BlendModes.ADD))
-    for(const bench of BENCHES){this.sprite(bench.x,386,'bench-seat',395);this.sprite(bench.x,396,'bench-back',405)}
-    for(const pot of DECK_POTS)this.floorSprite(pot.x,pot.y,'big-pot')
-    // Over everyone under them, below the rain.
+    this.view=new TanawView(this,{doorway:DOORWAY,sceneWidth:W,lightDepth:LIGHT_DEPTH,skyMinute:this.opts.skyMinute,reducedMotion:()=>Boolean(this.opts.reducedMotion),rainy:()=>this.music==='rain'})
+    // Patio umbrellas open over the deck's benches and table in the rain: over everyone under them, below the rain.
     this.patioUmbrellas=PATIO_UMBRELLAS.map(p=>this.add.image(p.x,p.y,'patio-umbrella').setOrigin(.5,1).setScale(PX).setDepth(LIGHT_DEPTH-1.5).setVisible(false))
-    // Sunset light spills in through the doorway onto the café floor.
-    this.doorwayGlow=this.sprite(340,(deck.DOORWAY.top+deck.DOORWAY.bottom)/2,'doorway-glow',LIGHT_DEPTH-1).setBlendMode(Phaser.BlendModes.ADD)
-    // Rain over the deck and the view while the café jukebox plays the rainy mood: over visitors, under name tags.
-    this.rainFx=this.add.graphics().setDepth(LIGHT_DEPTH+1)
-    this.applySky()
-    this.time.addEvent({delay:30_000,loop:true,callback:()=>this.applySky()})
-  }
-  // Colours, sun and moon for the current minute. Cheap enough to check every half minute; redraws only on a change.
-  private applySky(){
-    const minute=this.opts.skyMinute??manilaMinute(),rain=this.music==='rain'
-    // The rainy mood brings an overcast sky: colours wash toward grey, the sun and stars hide, the lamps come on.
-    const clear=skyAt(minute),grey=0x7d8896,sky:Sky=rain?{...clear,top:mixColor(clear.top,grey,.6),mid:mixColor(clear.mid,grey,.6),horizon:mixColor(clear.horizon,grey,.6),
-      far:mixColor(clear.far,grey,.45),island:mixColor(clear.island,grey,.35),lake:mixColor(clear.lake,grey,.5),near:mixColor(clear.near,0x3f4a44,.3),
-      warmth:clear.warmth*.2,dark:Math.max(clear.dark,.2),lights:Math.max(clear.lights,.7),stars:0,fog:Math.max(clear.fog,.5)}:clear
-    const sunAt=rain?undefined:sunArc(minute),moonAt=rain?undefined:moonArc(minute)
-    this.phase=skyPhase(minute)
-    const key=JSON.stringify([sky,sunAt,moonAt])
-    if(key===this.skyKey)return
-    this.skyKey=key;this.sky=sky;this.fxFrame=-2
-    const g=this.skyGfx,left=deck.VIEW_LEFT,width=deck.VIEW_ART_W*PX
-    if(!g)return
-    // Fifteen bands from the top of the sky to the horizon, then the lake with its far shore line and a few ripples.
-    g.clear()
-    for(let i=0;i<15;i++){const t=i/14;g.fillStyle(t<.6?mixColor(sky.top,sky.mid,t/.6):mixColor(sky.mid,sky.horizon,(t-.6)/.4)).fillRect(left,i*14,width,14)}
-    g.fillStyle(sky.lake).fillRect(left,206,width,RAIL_Y-206).fillStyle(mixColor(sky.lake,sky.horizon,.45)).fillRect(left,206,width,PX)
-    g.fillStyle(mixColor(sky.lake,0x000000,.08))
-    for(const y of [222,238,256,274])for(let x=left+(y*13)%40;x<left+width;x+=48)g.fillRect(x,y,18,PX)
-    for(const {texture,color} of this.painted)texture.paint(color(sky))
-    for(const cloud of this.clouds)cloud.image.setAlpha(1-sky.dark*.6)
-    const place=(orb:{body:Phaser.GameObjects.Image;glow:Phaser.GameObjects.Image}|undefined,at:number|undefined,x0:number,span:number,base:number,rise:number,alpha:number)=>{
-      if(!orb)return
-      const visible=at!==undefined&&alpha>0
-      orb.body.setVisible(visible);orb.glow.setVisible(visible)
-      if(!visible)return
-      const x=Math.round((x0+at*span)/PX)*PX,y=Math.round((base-Math.sin(at*Math.PI)*rise)/PX)*PX
-      orb.body.setPosition(x,y).setAlpha(alpha);orb.glow.setPosition(x,y).setAlpha(alpha*.8)
-    }
-    place(this.sun,sunAt,392,296,196,170,1)
-    place(this.moon,moonAt,404,272,204,160,Math.max(.25,sky.stars))
-    // The deck floor darkens a little at night and warms at sunset; the lamps come on as the light goes.
-    this.deckShade?.clear().fillStyle(0x141a33,sky.dark*.45).fillRect(360,RAIL_Y,W-360,248).fillStyle(sky.glow,sky.warmth*.12).fillRect(360,RAIL_Y,W-360,248)
-    this.doorwayGlow?.setAlpha(sky.warmth*.9).setVisible(sky.warmth>.05)
-    for(const pool of this.deckPools)pool.setAlpha(sky.lights*.8).setVisible(sky.lights>.05)
-    const lit=sky.lights>.3
-    this.wire?.clear().fillStyle(0x3d2a1e)
-    for(let x=WIRE.x0;x<=WIRE.x1;x+=PX)this.wire?.fillRect(x,wireY(x),PX,PX)
-    for(const bulb of DECK_BULBS)this.wire?.fillStyle(0x3d2a1e).fillRect(bulb.x,bulb.y-PX*2,PX/2,PX).fillStyle(lit?0xffd98a:0xd9c8a6).fillRect(bulb.x-PX/2,bulb.y-PX,PX*1.5,PX*2).fillStyle(lit?0xfff3d6:0xeee2c8).fillRect(bulb.x-PX/2,bulb.y-PX,PX/2,PX/2)
-  }
-  // Clouds drift, stars twinkle, light glints on the lake and morning mist slides over it; all slow, a few frames a second.
-  private updateDeck(){
-    const now=this.time.now,motion=!this.opts.reducedMotion,sky=this.sky,left=deck.VIEW_LEFT,width=deck.VIEW_ART_W*PX
-    if(motion)for(const cloud of this.clouds){const x=Math.round((left-70+(now/1000*cloud.speed+cloud.offset)%(width+140))/PX)*PX;if(cloud.image.x!==x)cloud.image.setX(x)}
-    this.deckBulbs.forEach((bulb,i)=>{
-      const alpha=sky.lights<.05?0:motion?Math.min(1,sky.lights-.05+Math.round((Math.sin(now/1300+i*1.3)*.5+.5)*3)/30):sky.lights
-      if(bulb.alpha!==alpha)bulb.setAlpha(alpha)
-    })
-    this.updateRain()
-    this.updateSmoke()
-    const frame=motion?Math.floor(now/400):-1
-    if(frame===this.fxFrame)return
-    this.fxFrame=frame
-    const stars=this.starGfx,fx=this.lakeFx
-    stars?.clear()
-    if(stars&&sky.stars>0)STARS.forEach((star,i)=>{
-      if(motion&&!star.bright&&(frame+i)%9===0)return
-      stars.fillStyle(0xfff6dc,sky.stars*(star.bright?1:.6)).fillRect(star.x,star.y,star.bright?PX:PX/2,star.bright?PX:PX/2)
-    })
-    if(!fx)return
-    fx.clear()
-    // A broken column of light on the water under the sun or the moon.
-    const orb=this.sun?.body.visible?this.sun.body:this.moon?.body.visible?this.moon.body:undefined
-    if(orb){
-      const strength=orb===this.sun?.body?.5:.35*sky.stars
-      for(let i=0,y=212;y<292;i++,y+=8){
-        const w=(6+((i*5+Math.max(0,frame))%4)*4)*(1+(y-212)/80)
-        fx.fillStyle(sky.glow,strength*(1-(y-212)/110)).fillRect(Math.round((orb.x-w/2)/PX)*PX,y,Math.round(w/PX)*PX,PX)
-      }
-    }
-    if(sky.fog>.05)for(const [y,offset] of [[226,0],[244,80],[262,150]] as const){
-      const drift=motion?(Math.max(0,frame)*PX/2)%220:0
-      for(let x=left-220+offset+drift;x<left+width;x+=220)fx.fillStyle(0xffffff,sky.fog*.28).fillRect(Math.round(x/PX)*PX,y,120,PX*3).fillStyle(0xffffff,sky.fog*.16).fillRect(Math.round(x/PX)*PX+16,y-PX*2,80,PX*2)
-    }
-  }
-  // Rain over the deck and the view (see drawRain), at about eleven frames a second; a still frame with reduced motion.
-  private updateRain(){
-    const fx=this.rainFx,motion=!this.opts.reducedMotion
-    if(!fx)return
-    const frame=this.music!=='rain'?-3:motion?Math.floor(this.time.now/90):-1
-    if(frame===this.rainFrame)return
-    this.rainFrame=frame
-    if(frame===-3){fx.clear();return}
-    drawRain(fx,{x:DECK_LEFT,y:0,width:deck.VIEW_ART_W*PX-(DECK_LEFT-deck.VIEW_LEFT),height:H},RAIL_Y,frame)
-  }
-  // The volcano's plume (see volcanoSmoke): pixel puffs rising from the crater, growing, drifting with the wind and
-  // fading, in the sky's colours. Five frames a second; a still plume with reduced motion.
-  private updateSmoke(){
-    const g=this.smokeGfx,motion=!this.opts.reducedMotion
-    if(!g)return
-    const strength=volcanoSmoke(Date.now()),frame=strength<=0?-3:motion?Math.floor(this.time.now/200):-1
-    const key=frame===-3?-3:frame*100+Math.round(strength*20)
-    if(key===this.smokeKey)return
-    this.smokeKey=key;g.clear()
-    if(frame===-3)return
-    const sky=this.sky,night=sky.dark>.3,color=night?mixColor(sky.mid,0xffffff,.45):mixColor(0xfafafa,sky.horizon,.2)
-    const snap=(value:number)=>Math.round(value/PX)*PX,cycle=8000,clock=motion?this.time.now:2600
-    for(let i=0;i<9;i++){
-      const p=((clock+i*cycle/9)%cycle)/cycle,r=snap(4+p*13),x=snap(CRATER.x+p*p*40+Math.sin(p*5+i)*3),y=snap(CRATER.y-p*100)
-      g.fillStyle(color,strength*(night?.5:.8)*(p<.1?p/.1:1-(p-.1)/.9))
-      for(let dy=-r;dy<=r;dy+=PX){const half=snap(Math.sqrt(Math.max(0,r*r-dy*dy)));if(half)g.fillRect(x-half,y+dy,half*2,PX)}
-    }
   }
   // A thought for the view, at most every 45 seconds unless the visitor just settled at the railing or on a bench.
   private thinkAboutView(settled=false){
     if(!settled&&this.time.now<this.nextViewThought)return
     this.nextViewThought=this.time.now+45_000
-    const smoking=this.music!=='rain'&&volcanoSmoke(Date.now())>.3&&Math.random()<.5
-    this.say(pick(this.music==='rain'?RAIN_LINES:smoking?SMOKE_LINES:VIEW_LINES[this.phase]),3200)
+    if(this.view)this.say(this.view.thought(),3200)
   }
   // The page's View button, or a tap on the view: walk to the nearest free spot at the railing (or a bench) and take it in.
   enjoyView(){
@@ -432,18 +238,15 @@ class CafeScene extends Phaser.Scene{
       texture(`${id}-step1`,art.visitorArt(id,'step1'));texture(`${id}-step2`,art.visitorArt(id,'step2'))
       texture(`${id}-sit`,sittingVisitorArt(id));texture(`${id}-sit-blink`,sittingVisitorArt(id,true))
       texture(`${id}-wave`,cafe.wavingVisitorArt(id,false));texture(`${id}-sit-wave`,cafe.wavingVisitorArt(id,true))
-      texture(`${id}-lean`,deck.backVisitorArt(id,'lean'));texture(`${id}-lean-wave`,deck.backVisitorArt(id,'lean',true))
-      texture(`${id}-back-sit`,deck.backVisitorArt(id,'sit'));texture(`${id}-back-sit-wave`,deck.backVisitorArt(id,'sit',true))
     }
+    createDeckTextures(this,DOORWAY)
     for(const open of [false,true])for(const busy of [false,true])texture(`cr-${open?'open':'closed'}-${busy?'busy':'free'}`,cafe.restroomDoorArt(open,busy))
-    texture('deck-moon',deck.moonArt());texture('patio-umbrella',deck.patioUmbrellaArt());texture('hand-umbrella',deck.handUmbrellaArt())
-    texture('deck-floor',deck.deckFloorArt());texture('deck-wall',deck.partitionArt());texture('deck-sign',deck.deckSignArt());texture('deck-post',deck.lightPostArt())
-    texture('bench-seat',deck.benchSeatArt());texture('bench-back',deck.benchBackArt());texture('light-pool',lightPoolArt())
+    texture('patio-umbrella',deck.patioUmbrellaArt());texture('hand-umbrella',deck.handUmbrellaArt())
     for(const frame of ['idle','blink','wave','brew','serve'] as const)texture(`barista-${frame}`,cafe.baristaArt(frame))
     texture('cafe-counter',cafe.cafeCounterArt());texture('espresso-idle',cafe.espressoArt('idle'));texture('espresso-brew',cafe.espressoArt('brew'))
     for(const variant of [0,1,2] as const)texture(`cafe-table-${variant}`,cafe.cafeTableArt(variant))
     texture('cafe-chair',cafe.cafeChairArt());texture('sofa',cafe.sofaArt())
-    for(const drink of drinkOptions)texture(`cup-${drink.id}`,cafe.cupArt(drink.id))
+    createDrinkTextures(this)
     texture('big-pot',bigPotArt());texture('plant-small',art.smallPlantArt());texture('bulb-glow',glowArt(9,'#ffd98a'))
     texture('jukebox-idle',art.jukeboxArt('idle'));for(const frame of [0,1,2,3] as const)texture(`jukebox-${frame}`,art.jukeboxArt(frame))
     texture('music-note',art.musicNoteArt());texture('entrance',art.entranceArt())
@@ -458,6 +261,8 @@ class CafeScene extends Phaser.Scene{
     if(x>=DECK_LEFT&&y<RAIL_Y-8){spark();this.enjoyView();return}
     if(x<0||x>W){const p=nearestOpen(x,y);if(p){spark();this.walkTo(p.x,p.y)}return}
     if(CR.area.contains(x,y)){spark();this.chooseSeat([CAFE_RESTROOM_SEAT]);return}
+    const bin=sceneBins.cafe.find(b=>Math.abs(x-b.x)<=18&&y>=b.y-26&&y<=b.y+16)
+    if(bin){interact(bin.standX,bin.standY,'trash');return}
     if(y>=548&&x>=126&&x<=234){interact(DOOR.x,DOOR.standY,'outside');return}
     if(this.jukebox&&Math.abs(x-JUKEBOX.x)<28&&y>=JUKEBOX.y-34&&y<=JUKEBOX.y+34){interact(JUKEBOX.standX,JUKEBOX.standY,'cafe-jukebox');return}
     if(BOARD.area.contains(x,y)){interact(BOARD.standX,BOARD.standY,'cafe-board');return}
@@ -541,6 +346,7 @@ class CafeScene extends Phaser.Scene{
   orderDrink(drink:DrinkId,surprise=false){
     const option=drinkOptions.find(d=>d.id===drink)
     if(!option||!this.barista)return
+    if(this.self?.drink){this.baristaSay(HOLDING_ALREADY);return}
     if(this.baristaBusy){this.baristaSay('Sandali lang po, may ginagawa pa ako!');return}
     this.baristaSay(surprise?`Surprise! Isang ${option.label}, coming up!`:`Isang ${option.label}, coming up!`)
     const quick=Boolean(this.opts.reducedMotion)
@@ -618,25 +424,32 @@ class CafeScene extends Phaser.Scene{
     if(seat?.kind==='bench'&&now-visitor.sitSince>SIT_MS)return {x:sprite.x+16,y:378}
     return {x:sprite.x+13,y:sprite.y-lift+8}
   }
-  private holdDrink(visitor:Visitor,drink:DrinkId|null){
+  // A drink let go goes into the bin the visitor stands by (that's the only way to let one go).
+  private holdDrink(visitor:Visitor,drink:HeldDrink|null){
     visitor.drink=drink??undefined
-    if(!drink){visitor.cup?.destroy();visitor.cup=undefined;return}
+    if(!drink){
+      const cup=visitor.cup,bin=binNear(this.bins,visitor.sprite.x,visitor.sprite.y)
+      visitor.cup=undefined
+      if(cup&&bin)tossIntoBin(this,cup,bin,Boolean(this.opts.reducedMotion));else cup?.destroy()
+      return
+    }
     if(visitor.cup)visitor.cup.setTexture(`cup-${drink}`)
     else visitor.cup=this.sprite(visitor.sprite.x,visitor.sprite.y,`cup-${drink}`,visitor.sprite.depth+.5)
     this.placeTags(visitor)
   }
-  setDrink(id:string,drink:DrinkId|null){
+  setDrink(id:string,drink:HeldDrink|null){
     const target=id===this.selfId?this.self:this.remotes.get(id)
     if(!target||target.drink===(drink??undefined))return
-    if(target!==this.self&&drink)this.serveRemote(target)
+    if(target!==this.self&&drink&&target.cup===undefined)this.serveRemote(target)
     this.holdDrink(target,drink)
   }
   // The visitor's own action plays at once; the server shares it with everyone else in the café.
   act(action:CafeAction){
     const self=this.self
-    if(!self||(action==='sip'&&!self.drink))return
+    if(!self||(action==='sip'&&!self.drink))return false
     this.playOn(self,action)
     this.opts.onAct(action)
+    return true
   }
   playAction(id:string,action:CafeAction){const target=id===this.selfId?undefined:this.remotes.get(id);if(target)this.playOn(target,action)}
   private playOn(visitor:Visitor,action:CafeAction){
@@ -668,10 +481,10 @@ class CafeScene extends Phaser.Scene{
     this.scale.setGameSize(width*this.zoom,H*this.zoom)
     this.fitCamera(width)
   }
-  setReducedMotion(value:boolean){this.opts.reducedMotion=value;this.steamFrame=-2;this.windowFrame=-2;this.fxFrame=-2;this.rainFrame=-2;this.cameras.main.setLerp(value?1:.12,1)}
+  setReducedMotion(value:boolean){this.opts.reducedMotion=value;this.steamFrame=-2;this.windowFrame=-2;this.view?.setReducedMotion();this.cameras.main.setLerp(value?1:.12,1)}
   setMusic(mood:CafeMood|null){
     if(this.music===mood)return
-    this.music=mood;this.windowFrame=-2;this.rainFrame=-2;this.applySky()
+    this.music=mood;this.windowFrame=-2;this.view?.applySky()
     for(const umbrella of this.patioUmbrellas)umbrella.setVisible(mood==='rain')
   }
   private animateVisitor(visitor:Visitor,moving:boolean){
@@ -731,7 +544,7 @@ class CafeScene extends Phaser.Scene{
     const now=this.time.now,motion=!this.opts.reducedMotion,base=BULB_GLOW[this.daylight]
     this.bulbs.forEach((bulb,i)=>{const alpha=motion?Math.min(1,base-.05+Math.round((Math.sin(now/1300+i*1.7)*.5+.5)*3)/30):base;if(bulb.alpha!==alpha)bulb.setAlpha(alpha)})
     this.updateWindow()
-    this.updateDeck()
+    this.view?.update()
     // The CR's light is red while someone is inside; its door stands open while someone goes in or comes out.
     if(this.crDoor){
       const visitors=[this.self,...this.remotes.values()]
@@ -867,7 +680,7 @@ class CafeScene extends Phaser.Scene{
   setPlayers(players:Player[],selfId:string){
     if(selfId!==this.selfId&&this.self){
       const own=players.find(p=>p.id===selfId)
-      if(own){this.self.sprite.setPosition(own.x,own.y);this.lastX=own.x;this.lastY=own.y;this.path=[];this.afterPath=undefined;this.standUp(false);this.holdDrink(this.self,isDrink(own.drink)?own.drink:null)}
+      if(own){this.self.sprite.setPosition(own.x,own.y);this.lastX=own.x;this.lastY=own.y;this.path=[];this.afterPath=undefined;this.standUp(false);this.holdDrink(this.self,isHeldDrink(own.drink)?own.drink:null)}
     }
     this.selfId=selfId
     // A visitor can change their name mid-visit (see /api/me/nickname); the next list carries it to every name tag.
@@ -886,7 +699,7 @@ class CafeScene extends Phaser.Scene{
       // Someone already seated when this visitor arrives is drawn seated, without the hop.
       if(p.pose==='sit'&&remote.pose!=='sit'){remote.sprite.setPosition(p.x,p.y);remote.pose='sit';remote.seat=p.seat;remote.sitSince=-Infinity;remote.hidden=p.seat===CAFE_RESTROOM_SEAT?1:0}
       else if(p.pose!=='sit')this.movePlayer(p.id,p.x,p.y)
-      const drink=isDrink(p.drink)?p.drink:undefined
+      const drink=isHeldDrink(p.drink)?p.drink:undefined
       if(remote.drink!==drink)this.holdDrink(remote,drink??null)
       this.placeTags(remote)
     }
@@ -943,5 +756,5 @@ export function createCafe(el:HTMLElement,opts:Options):CafeGame{
     showBubble:(id,text)=>{if(active())scene.showBubble(id,text)},setReducedMotion:value=>{if(active())scene.setReducedMotion(value)},setControlsEnabled:value=>scene.setControlsEnabled(value),
     exitScene:()=>active()?scene.exitScene():Promise.resolve(),cancelExit:()=>{if(active())scene.cancelExit()},setViewWidth:width=>scene.setViewWidth(width),
     setPose:(id,pose,seat)=>{if(active())scene.setPose(id,pose,seat)},setDrink:(id,drink)=>{if(active())scene.setDrink(id,drink)},playAction:(id,action)=>{if(active())scene.playAction(id,action)},
-    orderDrink:(drink,surprise)=>{if(active())scene.orderDrink(drink,surprise)},act:action=>{if(active())scene.act(action)},standUp:()=>{if(active())scene.standUp()},setMusic:mood=>{if(active())scene.setMusic(mood)},enjoyView:()=>{if(active())scene.enjoyView()}}
+    orderDrink:(drink,surprise)=>{if(active())scene.orderDrink(drink,surprise)},act:action=>{if(active())scene.act(action)},sip:()=>active()&&scene.act('sip'),standUp:()=>{if(active())scene.standUp()},setMusic:mood=>{if(active())scene.setMusic(mood)},enjoyView:()=>{if(active())scene.enjoyView()}}
 }

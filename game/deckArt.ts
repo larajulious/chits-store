@@ -10,11 +10,15 @@ const hex=(value:number)=>`#${value.toString(16).padStart(6,'0')}`
 const cone=(x:number,center:number,width:number,height:number)=>height*Math.max(0,1-Math.abs(x-center)/width)**1.4
 type HeadId=Parameters<typeof headArt>[0]
 
-// Far ridge: a long range with a broad peak on the left and a sharper one where the sun sets.
-export function farRidgeArt(){
+// The two landscapes: the café looks over a lake with a volcano island; the store over a green valley with a village.
+export type Landscape='lake'|'valley'
+// Far ridge. Over the lake: a long range with a broad peak on the left and a sharper one where the sun sets.
+// Over the valley: lower, rounder mountains with one tall summit in the middle.
+export function farRidgeArt(landscape:Landscape='lake'){
   const art=new PixelArt(VIEW_ART_W,44)
   for(let x=0;x<VIEW_ART_W;x++){
-    const height=14+7*Math.sin(x/29+.6)+4*Math.sin(x/11+2)+cone(x,46,30,16)+cone(x,160,16,20)+cone(x,300,26,24)+cone(x,410,30,12)
+    const height=landscape==='valley'?10+5*Math.sin(x/23+2)+3*Math.sin(x/9+1)+cone(x,30,34,10)+cone(x,110,44,26)+cone(x,236,28,12)+cone(x,360,40,20)
+      :14+7*Math.sin(x/29+.6)+4*Math.sin(x/11+2)+cone(x,46,30,16)+cone(x,160,16,20)+cone(x,300,26,24)+cone(x,410,30,12)
     const top=44-Math.round(Math.max(2,Math.min(40,height)))
     for(let y=top;y<44;y++)art.set(x,y,y===top?'#ffffff':noise(x,y)%9===0&&y>top+2?'#d8d8d8':'#ececec')
   }
@@ -32,6 +36,44 @@ export function islandArt(){
   }
   return art.rect(0,15,64,1,'#f6f6f6')
 }
+// The valley's middle ground, where the lake would be: rolling hills stepped into rice terraces, with clumps of trees.
+// Drawn in greys and painted green by the scene. The hill line is lowest around x 100..140 (world 560..640), where the
+// village sits (see VALLEY_VILLAGE).
+export const VALLEY_VILLAGE={x:600,y:228}
+export function valleyArt(){
+  const art=new PixelArt(VIEW_ART_W,60),tops:number[]=[]
+  for(let x=0;x<VIEW_ART_W;x++){
+    const top=Math.round(11+7*Math.sin(x/38+1.4)+3*Math.sin(x/13))
+    tops.push(top)
+    for(let y=top;y<60;y++)art.set(x,y,y===top?'#ffffff':(y-top)%5===0?'#cdcdcd':(y-top)%5===1?'#f2f2f2':'#e2e2e2')
+  }
+  for(let x=6;x<VIEW_ART_W;x+=19+noise(x,5)%11){
+    const r=2+noise(x,9)%2,cy=tops[x]!+r+4
+    art.ellipse(x,cy,r+1,r,'#bdbdbd').ellipse(x-.5,cy-.6,r,r-.6,'#d0d0d0')
+  }
+  return art
+}
+// A small village on the valley floor: a white chapel and a few houses with red and teal roofs, in their own colours.
+export function villageArt(){
+  const art=new PixelArt(44,16),walls=['#fff8ea','#f1e2c6','#fff1cf','#e9dcc0']
+  const house=(x:number,w:number,h:number,roof:string,wall:string)=>{
+    art.rect(x,16-h,w,h,wall).rect(x,16-h,w,1,'#ffffff')
+    for(let i=0;i<3;i++)art.rect(x-1+i,16-h-1-i,w+2-i*2,1,roof)
+    art.set(x+Math.floor(w/2),16-Math.ceil(h/2),'#6b4630')
+  }
+  house(2,6,4,'#c8553d',walls[0]!);house(10,5,3,'#4f8a83',walls[1]!);house(30,6,4,'#c8553d',walls[2]!);house(38,5,3,'#a8432f',walls[3]!)
+  // The chapel: a taller white front with a bell tower and a cross.
+  art.rect(18,8,8,8,'#fffdf6').rect(18,8,8,1,'#ffffff').rect(20,4,4,4,'#fffdf6').rect(21,1,2,3,'#fffdf6').set(21,0,'#9aa3ab').set(22,0,'#9aa3ab')
+  art.rect(17,7,10,1,'#c8553d').rect(21,12,2,4,'#6b4630').set(22,6,'#6b4630')
+  return art.outline('#5e4a3a')
+}
+// The village's windows, lit after dark (the scene fades them in with the lamps).
+export function villageLightsArt(){
+  const art=new PixelArt(44,16)
+  for(const [x,y] of [[4,13],[12,14],[22,10],[32,13],[40,14]] as const)art.rect(x,y,1,1,'#ffd98a').set(x+1,y,'#ffe8a8')
+  return art
+}
+
 // Near hills: the treed slope below the deck, high on the left, dipping in the middle so the lake shows.
 export function nearHillsArt(){
   const art=new PixelArt(VIEW_ART_W,52),tops:number[]=[]
@@ -91,11 +133,11 @@ export function deckFloorArt(){
   for(const x of [20,64,118,160])art.set(x,123,'#f3a09c').set(x+1,124,'#fff1b0')
   return art
 }
-// The wall between the café and the deck, seen from above: the end of the back wall, then a thin wall with
-// a doorway (world y 372..452) through to the deck.
-export const DOORWAY={top:372,bottom:452}
-export function partitionArt(){
-  const art=new PixelArt(8,290),gapTop=DOORWAY.top/2,gapBottom=DOORWAY.bottom/2
+// The wall between a room and its deck, seen from above: the end of the back wall, then a thin wall with a doorway
+// (world y doorway.top..doorway.bottom) through to the deck.
+export type Doorway={top:number;bottom:number}
+export function partitionArt(doorway:Doorway){
+  const art=new PixelArt(8,290),gapTop=doorway.top/2,gapBottom=doorway.bottom/2
   art.rect(0,0,8,101,'#e2cfae').rect(0,0,1,101,'#c9b48f').rect(7,0,1,101,'#c9b48f').rect(0,0,8,4,WOOD_DEEP).rect(0,76,8,23,'#8a5c3a').rect(0,76,8,1,WOOD_LIGHT).rect(0,99,8,2,WOOD_DEEP)
   for(let y=101;y<274;y++){
     if(y>=gapTop&&y<gapBottom)continue

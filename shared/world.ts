@@ -1,22 +1,29 @@
 // The connected places a visitor can stand in. The server validates every move against the scene's floor,
 // so keep these numbers in step with the walkable areas the Phaser scenes draw.
-export type SceneId='store'|'outside'|'cafe'
+export type SceneId='store'|'outside'|'cafe'|'jeepney'
 export type Pose='stand'|'sit'
 type Point={x:number;y:number}
 type SceneInfo={label:string;width:number;height:number;floor:{minX:number;maxX:number;minY:number;maxY:number};spawn:Point}
 export const scenes:Record<SceneId,SceneInfo>={
   // Spawn just inside the entrance, so a visitor coming back from the street appears by the door.
-  store:{label:'Inside',width:360,height:580,floor:{minX:20,maxX:340,minY:260,maxY:542},spawn:{x:180,y:510}},
+  // The store (x 0..360), with a doorway near the top of its right wall onto its own Tanaw Deck (x 360..720).
+  store:{label:'Inside',width:720,height:580,floor:{minX:20,maxX:700,minY:260,maxY:542},spawn:{x:180,y:510}},
   // Two screens wide; the camera follows the visitor along the street. Spawn on the pavement outside the store door.
   outside:{label:'Outside',width:720,height:580,floor:{minX:20,maxX:700,minY:266,maxY:530},spawn:{x:360,y:300}},
   // Kape & Chits, the 24/7 coffee tambayan next door: a room the size of the store (x 0..360), then a doorway onto
   // the open-air Tanaw Deck beside it (x 360..720). The camera follows the visitor between the two.
   cafe:{label:'Kape & Chits',width:720,height:580,floor:{minX:20,maxX:700,minY:260,maxY:542},spawn:{x:180,y:510}},
+  // Riding a jeepney: everyone aboard sits on its bench (see jeepneySeats), on a trip through the countryside.
+  // There's nowhere to walk; the floor is just the bench row.
+  jeepney:{label:'Jeepney',width:360,height:580,floor:{minX:20,maxX:340,minY:390,maxY:410},spawn:{x:40,y:400}},
 }
-// Which doors connect which places: the store and the café both open onto the street.
-const links:Record<SceneId,readonly SceneId[]>={store:['outside'],outside:['store','cafe'],cafe:['outside']}
+// The jeepney's bench, rear to front: one rider per seat. A full jeepney takes nobody else on.
+export const jeepneySeats:readonly Point[]=[40,80,120,160,200,240,280].map(x=>({x,y:400}))
+// Which doors connect which places: the store and the café both open onto the street, and a jeepney stops there.
+const links:Record<SceneId,readonly SceneId[]>={store:['outside'],outside:['store','cafe','jeepney'],cafe:['outside'],jeepney:['outside']}
 export function sceneLinked(from:SceneId,to:SceneId){return links[from].includes(to)}
-// Where a visitor appears after walking through a door: on the street, in front of the door they came out of.
+// Where a visitor appears after walking through a door: on the street, in front of the door they came out of
+// (a jeepney drops its riders in front of the store).
 export function arrivalSpot(scene:SceneId,from?:SceneId):Point{
   if(scene==='outside'&&from==='cafe')return {x:600,y:300}
   return scenes[scene].spawn
@@ -29,7 +36,7 @@ export function viewWidthFor(width:number,height:number){
   if(!(width>0&&height>0))return MIN_VIEW_W
   return Math.max(MIN_VIEW_W,Math.min(MAX_VIEW_W,Math.round(width/height*VIEW_H/2)*2))
 }
-export function isScene(value:unknown):value is SceneId{return value==='store'||value==='outside'||value==='cafe'}
+export function isScene(value:unknown):value is SceneId{return value==='store'||value==='outside'||value==='cafe'||value==='jeepney'}
 export function onSceneFloor(scene:SceneId,x:number,y:number){
   const {minX,maxX,minY,maxY}=scenes[scene].floor
   return Number.isFinite(x)&&Number.isFinite(y)&&x>=minX&&x<=maxX&&y>=minY&&y<=maxY
@@ -47,7 +54,22 @@ export const cafeSeats:readonly Point[]=[{x:80,y:360},{x:120,y:360},{x:80,y:460}
   {x:440,y:400},{x:480,y:400},{x:600,y:400},{x:640,y:400},{x:520,y:500},{x:560,y:500},
   {x:420,y:300},{x:480,y:300},{x:540,y:300},{x:600,y:300},{x:660,y:300},{x:80,y:540}]
 export const CAFE_RESTROOM_SEAT=19,RESTROOM_MS=6000
-export const sceneSeats:Record<SceneId,readonly Point[]>={store:[],outside:benchSeats,cafe:cafeSeats}
+// Garbage bins, the only way to let go of a drink: where each one stands, and the floor spot in front of it. A throw
+// counts from within BIN_REACH of a spot. The store's is out on its deck.
+export const sceneBins:Record<SceneId,readonly {x:number;y:number;standX:number;standY:number}[]>={
+  store:[{x:446,y:528,standX:440,standY:500}],
+  jeepney:[],
+  // Beside the bin (between it and the bench), so whoever throws doesn't hide it.
+  outside:[{x:56,y:272,standX:100,standY:300}],
+  cafe:[{x:264,y:528,standX:260,standY:500},{x:446,y:528,standX:440,standY:500}],
+}
+export const BIN_REACH=48
+export function nearBin(scene:SceneId,x:number,y:number){return sceneBins[scene].some(bin=>Math.hypot(x-bin.standX,y-bin.standY)<=BIN_REACH)}
+// The store's deck: the two benches facing the view (0-3), then five spots to lean on the railing (4-8). The same
+// places as on the café's deck, which is laid out the same way.
+export const storeSeats:readonly Point[]=[{x:440,y:400},{x:480,y:400},{x:600,y:400},{x:640,y:400},
+  {x:420,y:300},{x:480,y:300},{x:540,y:300},{x:600,y:300},{x:660,y:300}]
+export const sceneSeats:Record<SceneId,readonly Point[]>={store:storeSeats,outside:benchSeats,cafe:cafeSeats,jeepney:[]}
 // How far from the seat's floor spot a sit request is still believed (moves are sent about every 90 ms).
 export const SEAT_REACH=40
 export function isSeat(value:unknown,scene:SceneId='outside'):value is number{return Number.isInteger(value)&&(value as number)>=0&&(value as number)<sceneSeats[scene].length}

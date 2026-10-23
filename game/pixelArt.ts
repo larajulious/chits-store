@@ -73,7 +73,7 @@ export const WOOD_LIGHT='#c99460',WOOD='#a96f45',WOOD_DARK='#7a4f31',WOOD_DEEP='
 export const CREAM='#fff8ea',LEAF='#5c9a4a',LEAF_DARK='#447f3a',LEAF_LIGHT='#7cb662'
 
 // ---------- Characters ----------
-type HeadId=typeof avatarOptions[number]['id']|'menu-guide'|'staff'|'chef'|'fixer'
+type HeadId=typeof avatarOptions[number]['id']|'menu-guide'|'staff'|'chef'
 function lowestRow(art:PixelArt,x:number){for(let y=art.height-1;y>=0;y--)if(art.get(x,y))return y;return -1}
 // Heads are 20x16 with the shape inside x1..18, y1..14 so the outline fits. Without a face, it is the back of the head.
 export function headArt(id:HeadId,blink=false,face=true){
@@ -174,13 +174,12 @@ export function headArt(id:HeadId,blink=false,face=true){
     dots([[6,3],[15,4],[3,11],[10,13]],'#e9dcc4')
     shadeBottom('#d99a2e')
   }else{
-    // Store characters: the menu guide, staff, chef and handyman.
+    // Store characters: the menu guide, staff and chef.
     art.ellipse(10,8,8.5,6.5,body)
     shadeBottom(detail)
     if(id==='menu-guide')art.rect(3,2,14,2,'#fdf1d0').rect(2,4,16,1,'#e8d5aa')
     if(id==='staff')art.set(9,1,'#e8cfae').set(10,1,'#e8cfae').set(10,0,'#e8cfae')
     if(id==='chef')art.rect(2,3,16,2,'#2e2522').set(2,5,'#2e2522').set(17,5,'#2e2522')
-    if(id==='fixer')art.rect(4,1,12,4,'#f2c84b').rect(2,4,16,2,'#d9a12e').rect(6,2,3,1,'#fbe39a').rect(9,1,2,3,'#e6b53c')
   }
   art.outline(INK)
   if(!face)return art
@@ -265,39 +264,6 @@ export function danceFloorArt(frame:0|1|2|3|4){
     art.rect(x,y,8,6,light).set(x,y,'#ffffff').set(x+1,y,'#ffffff').set(x,y+1,'#ffffff')
   }
   return art.outline(INK)
-}
-
-// ---------- Handyman fixing a floor tile ----------
-// Kneeling in hard hat and safety vest; the right arm swings a hammer between frames.
-export function fixerArt(frame:'up'|'down'|'rest'){
-  const body=new PixelArt(26,24),skin='#fff0da',shirt='#5b7fa6',pants='#4a5f7a',steel='#9aa3ab',grip='#8a5c3a'
-  body.rect(5,14,10,6,'#e8843c').rect(8,14,4,6,shirt).rect(5,17,10,1,'#fff3c4').rect(14,15,1,5,'#c96a2c')
-  body.rect(3,15,2,3,shirt).set(3,18,skin).set(4,18,skin)
-  body.rect(4,20,5,2,pants).rect(11,20,5,2,pants).rect(3,22,3,1,'#5a3b27').rect(14,22,3,1,'#5a3b27')
-  if(frame==='up')body.rect(15,15,4,2,shirt).rect(19,11,2,5,shirt).rect(19,10,2,1,skin).rect(21,4,1,7,grip).rect(19,3,5,2,steel).rect(19,4,5,1,'#6f777f')
-  else if(frame==='down')body.rect(15,16,4,2,shirt).rect(19,17,1,2,skin).rect(20,18,4,1,grip).rect(23,17,2,3,steel).set(24,19,'#6f777f')
-  else body.rect(15,16,3,2,shirt).set(18,17,skin).rect(19,17,1,5,grip).rect(18,21,3,2,steel)
-  body.outline(INK)
-  return body.stamp(headArt('fixer'),0,0).shadow(11,23,9,1.2)
-}
-export function toolboxArt(){
-  const art=new PixelArt(16,11)
-  art.rect(1,4,14,6,'#c8553d').rect(1,4,14,1,'#a8432f').rect(1,5,14,1,'#e07a5c').rect(7,6,2,2,'#e8e2d0')
-  art.rect(5,1,6,1,'#5f666e').rect(5,2,1,2,'#5f666e').rect(10,2,1,2,'#5f666e').outline(INK)
-  return art.shadow(8,10.5,7,1)
-}
-export function coneArt(){
-  const art=new PixelArt(11,13)
-  for(let y=1;y<=9;y++){const half=Math.floor(y/2);art.rect(5-half,y,1+half*2,1,y===5||y===6?'#fff6e8':'#ee7d3a')}
-  art.rect(1,10,9,2,'#d8662c').outline(INK)
-  return art.shadow(5.5,12.5,5,1)
-}
-// The fresh tile in its gap, and the cracked tile that came out.
-export function repairTileArt(){return new PixelArt(12,12).rect(0,0,12,12,'#a9835a').rect(1,1,10,10,'#f7e2bf').rect(1,1,10,1,'#fff1d6').rect(10,2,1,9,'#e6cba3')}
-export function oldTileArt(){
-  const art=new PixelArt(12,9).rect(1,1,10,7,'#e3c79d').rect(1,1,10,1,'#ecd4ad')
-  for(const [x,y] of [[3,2],[4,3],[4,4],[5,5],[6,5],[7,6],[8,4],[9,3]] as const)art.set(x,y,'#8a6446')
-  return art.outline('#b08a62')
 }
 
 // ---------- The shop cats: Miming (orange) and Onay (grey tabby) ----------

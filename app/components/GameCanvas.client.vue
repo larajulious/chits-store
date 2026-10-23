@@ -2,14 +2,15 @@
 import type { Player, BoardOrder, StoreGame, JukeboxScene } from '../../game/createGame'
 import type { NeighborhoodGame } from '../../game/neighborhood'
 import type { CafeGame } from '../../game/cafe'
-import type { CafeAction, CafeMood, DrinkId } from '../../shared/cafe'
+import type { JeepneyGame } from '../../game/jeepney'
+import type { CafeAction, CafeMood, DrinkId, HeldDrink } from '../../shared/cafe'
 import type { CatName, CatTaps } from '../../shared/store-mascot'
 import { VIEW_H, viewWidthFor, type Pose, type SceneId } from '../../shared/world'
 const props=defineProps<{scene?:SceneId;storeOpen?:boolean;daylight?:'day'|'dusk'|'night';nickname:string;avatar:string;players:Player[];selfId:string;board:BoardOrder[];catEnabled?:boolean;guideEnabled?:boolean;controlsEnabled?:boolean;jukebox?:JukeboxScene;menuItems?:string[]|null;catTaps?:CatTaps|null;cafeMusic?:CafeMood|null;skyMinute?:number;cafeCount?:number;raining?:boolean}>()
 const emit=defineEmits<{(e:'move',pos:{x:number;y:number}):void;(e:'interact',kind:string):void;(e:'catTap',name:CatName):void;(e:'pose',pose:{pose:Pose;seat?:number}):void;(e:'drink',drink:DrinkId):void;(e:'act',action:CafeAction):void;(e:'ready',scene:SceneId):void}>()
 const target=ref<HTMLElement>()
 // Only one scene's game exists at a time: `api` is whichever is running, `store`/`street`/`cafe` the same object when it's that scene.
-let api:StoreGame|NeighborhoodGame|CafeGame|undefined,store:StoreGame|undefined,street:NeighborhoodGame|undefined,cafe:CafeGame|undefined
+let api:StoreGame|NeighborhoodGame|CafeGame|JeepneyGame|undefined,store:StoreGame|undefined,street:NeighborhoodGame|undefined,cafe:CafeGame|undefined
 let disposed=false,ready=false,generation=0
 let pendingStaffMessage:string|undefined
 let motionQuery:MediaQueryList|undefined
@@ -54,16 +55,17 @@ const joyX=ref(0),joyY=ref(0)
 // arriving: the visitor came through a door (not a page load), so the new scene plays its arrival; from: the place they left.
 async function mountGame(arriving:boolean,from?:SceneId){
   const id=++generation,scene=props.scene??'store',fontReady=loadPixelFont()
-  // The street and the café are their own chunks, downloaded the first time a visitor goes there.
-  const load=scene==='outside'?import('../../game/neighborhood'):scene==='cafe'?import('../../game/cafe'):import('../../game/createGame')
+  // The street, the café and the jeepney ride are their own chunks, downloaded the first time a visitor goes there.
+  const load=scene==='outside'?import('../../game/neighborhood'):scene==='cafe'?import('../../game/cafe'):scene==='jeepney'?import('../../game/jeepney'):import('../../game/createGame')
   const module=await Promise.all([load,fontReady]).then(([m])=>m)
   if(disposed||id!==generation||!target.value)return
   viewWidth=measureView(target.value)
-  const options={nickname:props.nickname,avatar:props.avatar as any,onMove:(x:number,y:number)=>emit('move',{x,y}),onInteract:(kind:string)=>emit('interact',kind),reducedMotion:motionQuery?.matches,controlsEnabled:props.controlsEnabled!==false,zoom:renderZoom(target.value,viewWidth),viewWidth,arriving}
+  const options={nickname:props.nickname,avatar:props.avatar as any,onMove:(x:number,y:number)=>emit('move',{x,y}),onInteract:(kind:string)=>emit('interact',kind),onAct:(action:CafeAction)=>emit('act',action),reducedMotion:motionQuery?.matches,controlsEnabled:props.controlsEnabled!==false,zoom:renderZoom(target.value,viewWidth),viewWidth,arriving}
   const onPose=(pose:Pose,seat?:number)=>emit('pose',{pose,seat})
   if('createNeighborhood' in module)api=street=module.createNeighborhood(target.value,{...options,onPose,from,daylight:props.daylight,storeOpen:props.storeOpen!==false})
-  else if('createCafe' in module)api=cafe=module.createCafe(target.value,{...options,onPose,onDrink:drink=>emit('drink',drink),onAct:action=>emit('act',action),daylight:props.daylight,skyMinute:props.skyMinute})
-  else api=store=module.createGame(target.value,{...options,onCatMeow:playCatSound,onCatTap:name=>emit('catTap',name),catEnabled:props.catEnabled,guideEnabled:props.guideEnabled,daylight:props.daylight})
+  else if('createJeepney' in module)api=module.createJeepney(target.value,{...options,skyMinute:props.skyMinute})
+  else if('createCafe' in module)api=cafe=module.createCafe(target.value,{...options,onPose,onDrink:drink=>emit('drink',drink),daylight:props.daylight,skyMinute:props.skyMinute})
+  else api=store=module.createGame(target.value,{...options,onPose,skyMinute:props.skyMinute,onCatMeow:playCatSound,onCatTap:name=>emit('catTap',name),catEnabled:props.catEnabled,guideEnabled:props.guideEnabled,daylight:props.daylight})
   const created=api
   visibilityChanged()
   created.game.events.once('ready',()=>{
@@ -105,10 +107,11 @@ function start(e:PointerEvent){(e.currentTarget as HTMLElement).setPointerCaptur
 function end(){joyX.value=joyY.value=0;api?.setDirection(0,0)}
 function showStaffBubble(text:string){if(disposed)return;if(ready)store?.showStaffBubble(text);else if((props.scene??'store')==='store')pendingStaffMessage=text}
 defineExpose({showBubble:(id:string,text:string)=>api?.showBubble(id,text),showStaffBubble,movePlayer:(id:string,x:number,y:number)=>api?.movePlayer(id,x,y),tossYarn:()=>store?.tossYarn(),petCat:()=>store?.petCat(),
-  exitScene:(to?:SceneId)=>api?.exitScene(to)??Promise.resolve(),cancelExit:()=>api?.cancelExit(),setPose:(id:string,pose:Pose,seat?:number)=>(street??cafe)?.setPose(id,pose,seat),vend:()=>street?.vend(),goInside:()=>street?.goInside(),goToCafe:()=>street?.goToCafe(),
-  setDrink:(id:string,drink:DrinkId|null)=>cafe?.setDrink(id,drink),playAction:(id:string,action:CafeAction)=>cafe?.playAction(id,action),orderDrink:(drink:DrinkId,surprise?:boolean)=>cafe?.orderDrink(drink,surprise),cafeAct:(action:CafeAction)=>cafe?.act(action),standUp:()=>cafe?.standUp(),enjoyView:()=>cafe?.enjoyView()})
+  exitScene:(to?:SceneId)=>api?.exitScene(to)??Promise.resolve(),cancelExit:()=>api?.cancelExit(),setPose:(id:string,pose:Pose,seat?:number)=>(street??cafe??store)?.setPose(id,pose,seat),vend:()=>street?.vend(),goInside:()=>street?.goInside(),goToCafe:()=>street?.goToCafe(),
+  // Drinks travel with visitors, so these reach whichever scene is running; relax and ordering are the café's.
+  setDrink:(id:string,drink:HeldDrink|null)=>api?.setDrink(id,drink),playAction:(id:string,action:CafeAction)=>api?.playAction(id,action),sip:()=>api?.sip()??false,orderDrink:(drink:DrinkId,surprise?:boolean)=>cafe?.orderDrink(drink,surprise),cafeAct:(action:CafeAction)=>cafe?.act(action),standUp:()=>(cafe??store)?.standUp(),enjoyView:()=>(cafe??store)?.enjoyView()})
 </script>
 <template>
-  <div class="game-mount" ref="target" :aria-label="scene==='outside'?'Interactive neighborhood street':scene==='cafe'?'Kape & Chits coffee shop':'Interactive bakery game'"/>
+  <div class="game-mount" ref="target" :aria-label="scene==='outside'?'Interactive neighborhood street':scene==='cafe'?'Kape & Chits coffee shop':scene==='jeepney'?'Riding a jeepney through the countryside':'Interactive bakery game'"/>
   <div ref="joystick" class="game-joystick" role="group" aria-label="Virtual movement joystick" @pointerdown.prevent="start" @pointermove.prevent="e=>{if(e.buttons)direction(e)}" @pointerup="end" @pointercancel="end" @lostpointercapture="end"><div class="joystick-knob" :style="{transform:`translate(${joyX}px,${joyY}px)`}"/></div>
 </template>

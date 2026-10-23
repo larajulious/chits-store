@@ -1,5 +1,6 @@
 import {avatarOptions} from '../shared/avatars'
-import {isDrink,type DrinkId} from '../shared/cafe'
+import {isColdCan,isDrink,type DrinkId,type HeldDrink} from '../shared/cafe'
+import {vendingProducts} from '../shared/world'
 import {INK,LEAF,LEAF_DARK,LEAF_LIGHT,PixelArt,WOOD,WOOD_DARK,WOOD_DEEP,WOOD_LIGHT,headArt} from './pixelArt'
 
 // Kape & Chits pixel art: one art pixel per texture pixel, shown at ART_SCALE like the store and the street.
@@ -185,6 +186,26 @@ export function restroomDoorArt(open:boolean,busy:boolean){
   return art
 }
 
+// A cold can from the street's vending machine, in its flavour's colours, small enough to hold.
+export function canArt(id:string){
+  const product=vendingProducts.find(entry=>entry.id===id),body=product?.can??'#c8553d',band=product?.band??'#fff1cf'
+  const art=new PixelArt(7,12)
+  art.rect(1,1,5,1,'#c5cad0').set(3,0,'#9aa3ab').rect(1,2,5,8,body).rect(1,5,5,2,band).rect(2,3,1,2,'#ffffff').rect(1,10,5,1,'#9aa3ab')
+  return art.outline(INK)
+}
+// Whatever a visitor holds: a café cup or a can. Its texture is always `cup-<id>`.
+export function heldDrinkArt(id:HeldDrink){return isDrink(id)?cupArt(id):canArt(id)}
+// A green garbage bin with a swing lid; 'open' tips the lid up while something drops in.
+export function binArt(frame:'idle'|'open'){
+  const art=new PixelArt(16,20),green='#5f7f5c',dark='#4f6d55',light='#7d9a6b'
+  art.rect(2,6,12,13,green).rect(2,6,1,13,light).rect(12,6,2,13,dark)
+  for(const x of [5,8,11])art.rect(x,8,1,9,dark)
+  art.rect(3,17,10,1,dark)
+  if(frame==='open')art.rect(1,1,13,2,dark).rect(2,0,11,1,light).set(1,3,dark).set(2,4,dark).rect(6,2,4,1,'#3a2a20')
+  else art.rect(1,3,14,3,dark).rect(2,3,12,1,light).rect(6,2,4,1,dark)
+  return art.outline(INK).shadow(8,19.4,7,1)
+}
+
 // A visitor waving: the store's standing body (or the street's seated one) with the right arm raised.
 export function wavingVisitorArt(id:HeadId,seated:boolean){
   const option=avatarOptions.find(a=>a.id===id)
@@ -204,8 +225,8 @@ export function wavingVisitorArt(id:HeadId,seated:boolean){
   return seated?body:body.shadow(10,25,7,1.2)
 }
 
-// Café sprites for the page's dialogs (see PixelSprite): the barista's face and the four cups.
+// Café sprites for the page's dialogs (see PixelSprite): the barista's face, the cups and the cans.
 export function cafeSpriteArt(name:string):PixelArt|undefined{
   if(name==='head-barista')return baristaHead()
-  if(name.startsWith('cup-')){const id=name.slice(4);if(isDrink(id))return cupArt(id)}
+  if(name.startsWith('cup-')){const id=name.slice(4);if(isDrink(id)||isColdCan(id))return heldDrinkArt(id)}
 }

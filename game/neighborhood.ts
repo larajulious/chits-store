@@ -1,15 +1,18 @@
 import Phaser from 'phaser'
 import {avatarOptions,type AvatarId} from '../shared/avatars'
-import {arrivalSpot,benchSeats,scenes,type Pose,type SceneId} from '../shared/world'
+import {arrivalSpot,benchSeats,sceneBins,scenes,type Pose,type SceneId} from '../shared/world'
 import * as art from './pixelArt'
 import * as street from './neighborhoodArt'
 import {handUmbrellaArt} from './deckArt'
+import {HeldDrinks,createDrinkTextures} from './heldDrink'
+import {JEEPNEY_STOP,trafficAt} from '../shared/traffic'
+import {isHeldDrink,type CafeAction,type HeldDrink} from '../shared/cafe'
 import {MAX_VIEW_W,MIN_VIEW_W,BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,NAME_TAG_GAP,PX,TAG_FONT,Tag,addTexture,characterPhase,createReactionTextures,currentDaylight,drawRain,findPath,isHalloweenSeason,reactionTexture,setDepthIfChanged,slideDoor,tagDepth,tapSparks,visitorFrame,type BoardOrder,type Player,type WorldGame} from './common'
 
 // Chits Neighborhood: the street outside the store. Loaded only when a visitor steps outside, as its own Phaser game.
 export type NeighborhoodGame = WorldGame & {setPose:(id:string,pose:Pose,seat?:number)=>void;setBoard:(orders:BoardOrder[])=>void;vend:()=>void;goInside:()=>void;goToCafe:()=>void;setStoreOpen:(open:boolean)=>void;setCafeCount:(count:number)=>void;setRain:(on:boolean)=>void}
 // from: the place the visitor just walked out of, so they appear (and the door closes) where they came out.
-type Options = {nickname:string;avatar:AvatarId;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onPose:(pose:Pose,seat?:number)=>void;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;from?:SceneId;daylight?:street.Daylight;viewWidth?:number;storeOpen?:boolean}
+type Options = {nickname:string;avatar:AvatarId;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onPose:(pose:Pose,seat?:number)=>void;onAct:(action:CafeAction)=>void;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;from?:SceneId;daylight?:street.Daylight;viewWidth?:number;storeOpen?:boolean}
 // lift: how far the art is drawn above the network position (sitting draws the visitor up on the seat).
 type Visitor = {sprite:Phaser.GameObjects.Image;label:Tag;avatar:string;phase:number;movingUntil:number;bubble?:Tag|Phaser.GameObjects.Image;pose:Pose;seat?:number;sitSince:number;lift:number;umbrella?:Phaser.GameObjects.Image}
 
@@ -27,8 +30,14 @@ const ORDER_BOARD={x:424,y:280,standX:420,standY:300}
 const STORE_WINDOWS=[292,428]
 // How far the scenery reaches past each end of the street, enough for the widest view.
 const SIDE=(MAX_VIEW_W-W)/2
-// Barricades and big pots just outside the walkable street, on the pavements and across the road.
-const ENDS=[{y:300,name:'big-pot'},{y:392,name:'barricade'},{y:446,name:'barricade'},{y:512,name:'big-pot'}]
+// Big pots just outside the walkable street, on both pavements. The road between them is open to traffic.
+const ENDS=[{y:300,name:'big-pot'},{y:512,name:'big-pot'}]
+// The road's two lanes (where a vehicle's wheels run): rightward traffic in the near lane, leftward in the far one.
+const LANES={right:466,left:420}
+// The jeepney stop's sign, on the near pavement beside where a waiting jeepney's rear door is.
+const STOP_SIGN={x:322,y:500}
+const pick=<T>(lines:readonly T[])=>lines[Math.floor(Math.random()*lines.length)]!
+const SAKAY_LINES=['Sakay na! Tanaw, Tanaw!','Sakay na, may bakante pa!','Biyaheng probinsya! Sakay na!']
 const LAMPS=[{x:210,y:298},{x:540,y:298},{x:250,y:472}]
 const TREES=[{x:70,y:468},{x:650,y:468}]
 // A closed neighbor, reserved for future expansion. Its bubble sits above the sign board, not over it.
@@ -41,6 +50,8 @@ const tambays=(count:number)=>`${count} ${count===1?'tambay':'tambays'} inside`
 const HALLOWEEN=isHalloweenSeason()
 // Floor footprints: bench, vending machine, order board, door plant, the café sign, three lamp posts, two tree trunks, the planter.
 const obstacles=[
+  ...sceneBins.outside.map(bin=>({x:bin.x-12,y:bin.y-10,w:24,h:18})),
+  {x:STOP_SIGN.x-6,y:STOP_SIGN.y-4,w:14,h:10},
   {x:84,y:262,w:72,h:32},{x:476,y:262,w:48,h:18},{x:398,y:262,w:52,h:34},{x:304,y:262,w:24,h:18},{x:632,y:266,w:40,h:36},
   ...LAMPS.map(lamp=>({x:lamp.x-10,y:lamp.y+32,w:20,h:18})),
   ...TREES.map(tree=>({x:tree.x-14,y:tree.y+28,w:28,h:20})),
@@ -95,6 +106,15 @@ class NeighborhoodScene extends Phaser.Scene{
   private mothFrame=-1
   private trees:{sprite:Phaser.GameObjects.Image;rustleUntil:number}[]=[]
   private vending?:Phaser.GameObjects.Image
+  // Drinks in visitors' hands, and the bin by the bench where they are thrown away.
+  private drinks?:HeldDrinks
+  // The vehicle going by now and then (see trafficAt), its headlight on the road after dark, and its honk.
+  private vehicle?:Phaser.GameObjects.Image
+  private headlight?:Phaser.GameObjects.Image
+  private honk?:{tag:Tag;pass:number;until:number}
+  // While a jeepney waits at the stop, its barker calls out; tapping the jeepney walks over and boards it.
+  private sakay?:{tag:Tag;pass:number}
+  private waitingJeepney?:Phaser.Geom.Rectangle
   private vendUntil=0
   private boardReady?:Phaser.GameObjects.Text
   private boardPrep?:Phaser.GameObjects.Text
@@ -161,6 +181,7 @@ class NeighborhoodScene extends Phaser.Scene{
     this.setStoreOpen(this.opts.storeOpen!==false)
     this.floorSprite(BENCH.x,BENCH.y,'bench')
     this.vending=this.floorSprite(VENDING.x,VENDING.y,'vending-idle')
+    this.drinks=new HeldDrinks(this,sceneBins.outside.map(bin=>this.floorSprite(bin.x,bin.y,'bin-idle')),()=>Boolean(this.opts.reducedMotion))
     this.text(VENDING.x-4,VENDING.y-31,'COLD',8,'#ad513f',this.vending.depth+1)
     const board=this.floorSprite(ORDER_BOARD.x,ORDER_BOARD.y,'order-board')
     // Order numbers only: the street board never shows the names staff add.
@@ -181,6 +202,10 @@ class NeighborhoodScene extends Phaser.Scene{
     this.lamps=LAMPS.map(({x,y})=>({post:this.floorSprite(x,y,'lamp-off'),x,y,flareUntil:0,
       glow:this.sprite(x,y-38,'lamp-glow',LIGHT_DEPTH).setBlendMode(Phaser.BlendModes.ADD),
       pool:this.sprite(x,y+50,'light-pool',LIGHT_DEPTH).setBlendMode(Phaser.BlendModes.ADD)}))
+    this.vehicle=this.add.image(0,0,'car-0-0').setOrigin(.5,1).setScale(PX).setVisible(false)
+    const stopSign=this.floorSprite(STOP_SIGN.x,STOP_SIGN.y-16,'jeepney-stop')
+    this.text(STOP_SIGN.x,STOP_SIGN.y-37,'JEEP',8,'#fff8ea',stopSign.depth+1);this.text(STOP_SIGN.x,STOP_SIGN.y-29,'STOP',8,'#ffd45e',stopSign.depth+1)
+    this.headlight=this.sprite(0,0,'light-pool',LIGHT_DEPTH).setBlendMode(Phaser.BlendModes.ADD).setVisible(false)
     this.moths=this.add.graphics().setDepth(LIT_DEPTH)
     this.applyDaylight()
     this.time.addEvent({delay:60_000,loop:true,callback:()=>{const next=this.opts.daylight??currentDaylight();if(next!==this.daylight){this.daylight=next;this.applyDaylight()}}})
@@ -193,8 +218,11 @@ class NeighborhoodScene extends Phaser.Scene{
     // Stepping out of the store or the café: fade in while the doors slide shut behind the visitor.
     if(this.opts.arriving){
       if(!this.opts.reducedMotion)camera.fadeIn(FADE_MS,...FADE_COLOR)
-      const [door,prefix]=this.fromCafe?[this.cafeDoor,'cafe-door']:[this.door,'shop-door']
-      this.time.delayedCall(this.opts.reducedMotion?0:450,()=>{if(door)slideDoor(this,door,prefix,false,Boolean(this.opts.reducedMotion))})
+      if(this.opts.from==='jeepney')this.jeepneyLeaves()
+      else{
+        const [door,prefix]=this.fromCafe?[this.cafeDoor,'cafe-door']:[this.door,'shop-door']
+        this.time.delayedCall(this.opts.reducedMotion?0:450,()=>{if(door)slideDoor(this,door,prefix,false,Boolean(this.opts.reducedMotion))})
+      }
     }
     this.doorReadyAt=this.time.now+1200
     if(this.input.keyboard){
@@ -210,7 +238,8 @@ class NeighborhoodScene extends Phaser.Scene{
   private createTextures(){
     const texture=(name:string,pixels:art.PixelArt)=>addTexture(this,name,pixels)
     texture('street',street.streetArt());texture('street-edge',street.streetEdgeArt())
-    texture('barricade',street.barricadeArt());texture('big-pot',street.bigPotArt());texture('house-glow',street.glowArt(16,'#ffcf7a'))
+    for(const kind of ['car','jeepney','tricycle'] as const)for(let paint=0;paint<4;paint++)for(const frame of [0,1] as const)texture(`${kind}-${paint}-${frame}`,street.vehicleArt(kind,paint,frame))
+    texture('big-pot',street.bigPotArt());texture('jeepney-stop',street.jeepneyStopArt());texture('house-glow',street.glowArt(16,'#ffcf7a'))
     for(const time of ['day','dusk','night'] as const)texture(`sky-${time}`,street.skyArt(time))
     texture('cloud',street.cloudArt())
     for(const option of avatarOptions){
@@ -221,7 +250,7 @@ class NeighborhoodScene extends Phaser.Scene{
     }
     for(const frame of [0,1,2,3] as const){texture(`shop-door-${frame}`,street.storeDoorArt(frame));texture(`cafe-door-${frame}`,street.cafeDoorArt(frame))}
     texture('cafe-sign',street.cafeSignArt());texture('hand-umbrella',handUmbrellaArt());texture('neon-glow',street.glowArt(16,'#ffb347'))
-    texture('bench',street.benchArt())
+    texture('bench',street.benchArt());createDrinkTextures(this)
     for(const frame of ['idle','blink','vend'] as const)texture(`vending-${frame}`,street.vendingArt(frame))
     texture('order-board',street.orderBoardArt())
     texture('lamp-off',street.lampArt(false));texture('lamp-on',street.lampArt(true))
@@ -252,7 +281,12 @@ class NeighborhoodScene extends Phaser.Scene{
     }
     // Tapping the café front (not the door) walks over to its door.
     if(CAFE_FRONT.contains(x,y)){spark();this.walkTo(CAFE_DOOR.x,CAFE_DOOR.standY);return}
+    // A jeepney waiting at the stop: walk to its rear door and get on. The sign says what it's for.
+    if(this.waitingJeepney?.contains(x,y)){interact(JEEPNEY_STOP.boardX,JEEPNEY_STOP.boardY,'jeepney');return}
+    if(Math.abs(x-STOP_SIGN.x)<=16&&y>=STOP_SIGN.y-56&&y<=STOP_SIGN.y+6){spark();this.noticeAt(STOP_SIGN.x,STOP_SIGN.y-66,'Jeepney stop! Tap the jeep when it stops here to ride.',3200,150);return}
     if(Math.abs(x-VENDING.x)<=24&&y>=196&&y<=284){interact(VENDING.standX,VENDING.standY,'vending');return}
+    const bin=sceneBins.outside.find(b=>Math.abs(x-b.x)<=18&&y>=b.y-26&&y<=b.y+16)
+    if(bin){interact(bin.standX,bin.standY,'trash');return}
     if(Math.abs(x-BENCH.x)<=36&&y>=256&&y<=302){spark();this.chooseSeat(x);return}
     if(Math.abs(x-ORDER_BOARD.x)<=28&&y>=252&&y<=306){interact(ORDER_BOARD.standX,ORDER_BOARD.standY,'board');return}
     const lamp=this.lamps.find(lamp=>Math.abs(x-lamp.x)<=14&&y>=lamp.y-50&&y<=lamp.y+50)
@@ -421,6 +455,38 @@ class NeighborhoodScene extends Phaser.Scene{
       if(this.raining){if(umbrella.x!==sprite.x+3||umbrella.y!==top-30)umbrella.setPosition(sprite.x+3,top-30);setDepthIfChanged(umbrella,sprite.depth+.6);umbrella.setAlpha(sprite.alpha)}
     }
   }
+  // A vehicle drives along its lane when the clock says one is passing (never with reduced motion). It honks at a
+  // visitor standing in its way; after dark its headlight lights the road ahead.
+  private updateTraffic(){
+    const vehicle=this.vehicle,light=this.headlight
+    if(!vehicle||!light)return
+    // With reduced motion only a jeepney already waiting at the stop shows (standing still), so it can still be boarded.
+    const live=trafficAt(Date.now()),pass=this.opts.reducedMotion&&!live?.stopped?undefined:live
+    this.waitingJeepney=undefined
+    if(!pass){if(vehicle.visible){vehicle.setVisible(false);light.setVisible(false)}this.honk?.tag.setVisible(false);this.sakay?.tag.setVisible(false);return}
+    const ahead=pass.rightward?1:-1,x=Math.round(pass.x/PX)*PX,y=pass.rightward?LANES.right:LANES.left
+    const texture=`${pass.kind}-${pass.paint}-${pass.stopped?0:Math.floor(this.time.now/110)%2}`
+    if(vehicle.texture.key!==texture)vehicle.setTexture(texture)
+    vehicle.setPosition(x,y).setFlipX(!pass.rightward).setDepth(y+10).setVisible(true)
+    const lamps=SHADE[this.daylight].lamps
+    light.setVisible(lamps>0).setAlpha(lamps).setPosition(x+ahead*(vehicle.displayWidth/2+36),y-4)
+    const self=this.self?.sprite,now=this.time.now
+    if(self&&!pass.stopped&&this.honk?.pass!==pass.id&&Math.abs(self.y-(y-10))<30&&(self.x-x)*ahead>0&&(self.x-x)*ahead<160){
+      this.honk?.tag.destroy()
+      this.honk={tag:this.tag(x,y-vehicle.displayHeight-30,'Beep beep!').setDepth(900),pass:pass.id,until:now+1600}
+    }
+    if(pass.stopped){
+      this.waitingJeepney=new Phaser.Geom.Rectangle(x-vehicle.displayWidth/2,y-vehicle.displayHeight,vehicle.displayWidth,vehicle.displayHeight)
+      if(this.sakay?.pass!==pass.id){this.sakay?.tag.destroy();this.sakay={tag:this.tag(x,y-vehicle.displayHeight-6,pick(SAKAY_LINES)).setDepth(900),pass:pass.id}}
+      this.sakay.tag.setVisible(true)
+    }else this.sakay?.tag.setVisible(false)
+    const honk=this.honk
+    if(honk){
+      const showing=honk.pass===pass.id&&now<honk.until
+      honk.tag.setVisible(showing)
+      if(showing)honk.tag.setPosition(x,y-vehicle.displayHeight-30)
+    }
+  }
   setRain(on:boolean){
     if(this.raining===on)return
     this.raining=on;this.rainFrame=-2;this.rainWash?.setVisible(on)
@@ -438,6 +504,8 @@ class NeighborhoodScene extends Phaser.Scene{
   // Lamps glow by evening and pulse very slightly; moths circle the lit heads at night. Redrawn only on a new frame.
   private updateAmbient(){
     this.updateRain()
+    this.drinks?.update()
+    this.updateTraffic()
     const now=this.time.now,motion=!this.opts.reducedMotion,{lamps:base}=SHADE[this.daylight]
     this.lamps.forEach((lamp,i)=>{
       const flare=now<lamp.flareUntil,on=flare||base>0
@@ -487,6 +555,7 @@ class NeighborhoodScene extends Phaser.Scene{
     if(door&&this.doorPush>=DOOR.pushMs&&!this.doorTriggered&&this.time.now>=this.doorReadyAt){this.doorTriggered=true;if(door==='store')this.enterStore();else this.opts.onInteract('cafe')}
   }
   exitScene(target?:SceneId){
+    if(target==='jeepney')return this.boardJeepney()
     return new Promise<void>(resolve=>{
       const self=this.self,exit=target==='cafe'?{door:this.cafeDoor,prefix:'cafe-door'}:{door:this.door,prefix:'shop-door'}
       if(!self||!exit.door){resolve();return}
@@ -501,6 +570,26 @@ class NeighborhoodScene extends Phaser.Scene{
         this.cameras.main.fade(FADE_MS,...FADE_COLOR,true,(_:unknown,progress:number)=>{if(progress>=1)resolve()})
       })
     })
+  }
+  // Climbing in at the jeepney's rear door while the screen fades.
+  private boardJeepney(){
+    return new Promise<void>(resolve=>{
+      const self=this.self
+      if(!self){resolve();return}
+      this.standUp(false)
+      this.exiting={x:self.sprite.x,y:self.sprite.y};this.resetMovement()
+      if(this.opts.reducedMotion){resolve();return}
+      this.tweens.add({targets:self.sprite,x:JEEPNEY_STOP.x-88,y:LANES.right-14,alpha:0,duration:FADE_MS+120,onUpdate:()=>this.placeTags(self)})
+      self.label.setAlpha(0)
+      this.cameras.main.fade(FADE_MS,...FADE_COLOR,true,(_:unknown,progress:number)=>{if(progress>=1)resolve()})
+    })
+  }
+  // Just off a jeepney in front of the store: it pulls away from the stop (unless the real traffic has one there now).
+  private jeepneyLeaves(){
+    if(this.opts.reducedMotion||trafficAt(Date.now())?.kind==='jeepney')return
+    const jeep=this.add.image(JEEPNEY_STOP.x,LANES.right,`jeepney-${Math.floor(Math.random()*4)}-0`).setOrigin(.5,1).setScale(PX).setDepth(LANES.right+10)
+    const wheels=this.time.addEvent({delay:110,loop:true,callback:()=>jeep.setTexture(jeep.texture.key.replace(/-(\d)$/,(_,f)=>`-${f==='0'?1:0}`))})
+    this.tweens.add({targets:jeep,x:W+SIDE+120,duration:3600,ease:'Quad.easeIn',delay:300,onComplete:()=>{wheels.remove();jeep.destroy()}})
   }
   cancelExit(){
     const from=this.exiting,self=this.self
@@ -550,7 +639,7 @@ class NeighborhoodScene extends Phaser.Scene{
     // A visitor can change their name mid-visit (see /api/me/nickname); the next list carries it to every name tag.
     for(const p of players){const visitor=p.id===selfId?this.self:this.remotes.get(p.id);if(visitor&&visitor.label.text!==p.nickname){visitor.label.setText(p.nickname);}}
     const incoming=new Set(players.filter(p=>p.id!==selfId).map(p=>p.id))
-    for(const [id,p] of this.remotes)if(!incoming.has(id)){p.sprite.destroy();p.label.destroy();p.bubble?.destroy();p.umbrella?.destroy();this.remotes.delete(id)}
+    for(const [id,p] of this.remotes)if(!incoming.has(id)){p.sprite.destroy();p.label.destroy();p.bubble?.destroy();p.umbrella?.destroy();this.drinks?.remove(p.sprite);this.remotes.delete(id)}
     for(const p of players){if(p.id===selfId)continue
       let remote=this.remotes.get(p.id)
       if(!remote){
@@ -562,6 +651,20 @@ class NeighborhoodScene extends Phaser.Scene{
       if(p.pose==='sit'&&remote.pose!=='sit'){remote.sprite.setPosition(p.x,p.y);remote.pose='sit';remote.seat=p.seat;remote.sitSince=-Infinity;this.placeTags(remote)}
       else if(p.pose!=='sit')this.movePlayer(p.id,p.x,p.y)
     }
+    for(const p of players){const visitor=p.id===selfId?this.self:this.remotes.get(p.id);if(visitor)this.drinks?.set(visitor.sprite,isHeldDrink(p.drink)?p.drink:null)}
+  }
+  // A new can from the machine lands in the hand once it has dropped into the tray; a drink let go goes in the bin.
+  setDrink(id:string,drink:HeldDrink|null){
+    const visitor=id===this.selfId?this.self:this.remotes.get(id)
+    if(!visitor)return
+    const wait=id===this.selfId&&drink?this.vendUntil-600-this.time.now:0
+    if(wait>0)this.time.delayedCall(wait,()=>this.drinks?.set(visitor.sprite,drink));else this.drinks?.set(visitor.sprite,drink)
+  }
+  playAction(id:string,action:CafeAction){const remote=this.remotes.get(id);if(remote&&action==='sip')this.drinks?.sip(remote.sprite)}
+  sip(){
+    if(!this.self||!this.drinks?.sip(this.self.sprite))return false
+    this.opts.onAct('sip')
+    return true
   }
   setPose(id:string,pose:Pose,seat?:number){
     if(id===this.selfId){if(pose==='stand'){this.standUp(false);this.say('Someone is sitting there!')}return}
@@ -611,5 +714,6 @@ export function createNeighborhood(el:HTMLElement,opts:Options):NeighborhoodGame
   return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(active())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(active())scene.movePlayer(id,x,y)},
     showBubble:(id,text)=>{if(active())scene.showBubble(id,text)},setReducedMotion:value=>{if(active())scene.setReducedMotion(value)},setControlsEnabled:value=>scene.setControlsEnabled(value),
     exitScene:target=>active()?scene.exitScene(target):Promise.resolve(),cancelExit:()=>{if(active())scene.cancelExit()},setViewWidth:width=>scene.setViewWidth(width),
-    setPose:(id,pose,seat)=>{if(active())scene.setPose(id,pose,seat)},setBoard:orders=>{if(active())scene.setBoard(orders)},vend:()=>{if(active())scene.vend()},goInside:()=>{if(active())scene.goInside()},goToCafe:()=>{if(active())scene.goToCafe()},setStoreOpen:open=>{if(active())scene.setStoreOpen(open)},setCafeCount:count=>{if(active())scene.setCafeCount(count)},setRain:on=>{if(active())scene.setRain(on)}}
+    setPose:(id,pose,seat)=>{if(active())scene.setPose(id,pose,seat)},setBoard:orders=>{if(active())scene.setBoard(orders)},vend:()=>{if(active())scene.vend()},goInside:()=>{if(active())scene.goInside()},goToCafe:()=>{if(active())scene.goToCafe()},setStoreOpen:open=>{if(active())scene.setStoreOpen(open)},setCafeCount:count=>{if(active())scene.setCafeCount(count)},setRain:on=>{if(active())scene.setRain(on)},
+    setDrink:(id,drink)=>{if(active())scene.setDrink(id,drink)},playAction:(id,action)=>{if(active())scene.playAction(id,action)},sip:()=>active()&&scene.sip()}
 }

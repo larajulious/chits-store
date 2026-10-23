@@ -12,8 +12,9 @@ export const residentCats:readonly {name:CatName;x:number;y:number;mood:CatMood;
   {name:'Onay',x:268,y:500,mood:'sleeping',roams:false},
 ]
 
-// Floor footprints in world units: the feedback board, the handyman's tile-repair corner, then the app-development sign.
-export const storeObstacles=[{x:290,y:440,w:70,h:90},{x:36,y:366,w:116,h:58},{x:288,y:330,w:72,h:88}]
+// Floor footprints in world units: the feedback board, then the app-development sign. The two boards stand low on the
+// right wall, leaving its upper part as the doorway to the store's deck.
+export const storeObstacles=[{x:290,y:448,w:70,h:90},{x:288,y:366,w:72,h:88}]
 const obstacles=storeObstacles
 export function mascotFloorPoint(x:number,y:number,padding=0){
   if(!Number.isFinite(x)||!Number.isFinite(y)||x<20+padding||x>340-padding||y<260+padding||y>542-padding)return false

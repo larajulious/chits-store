@@ -7,7 +7,7 @@ import { visitorName } from './auth'
 type ItemRow = { id:number; order_id:number; menu_item_id:number; name:string; price_centavos:number; quantity:number; line_total_centavos:number }
 type MessageRow = { id:number; order_id:number; role:'visitor'|'staff'|'system'; text:string; created_at:number }
 type CustomerOrderRow = { order_id:number; visitor_id:number; service_date:string; total_centavos:number; confirmed_at:number|null; staff_read_message_id:number; visitor_read_message_id:number; created_at:number }
-type InboxRow = CustomerOrderRow & OrderRow & { visitor_avatar_key:string|null; last_message:string|null; unread:number }
+type InboxRow = CustomerOrderRow & OrderRow & { visitor_avatar_key:string|null; visitor_nickname:string|null; last_message:string|null; unread:number }
 
 // Sent from the store as soon as an order is placed, so the customer can share the address while staff are on their way.
 export const ORDER_AUTO_REPLY='Thank you so much for your order! May we kindly ask for your delivery address? One of our staff members will be with you shortly to confirm your order. We appreciate your patience!'
@@ -25,12 +25,12 @@ export function customerOrder(id:number,visitorId?:number){
 }
 
 export function orderSummary(row:InboxRow){
-  return { ...publicOrder(row,row.confirmed_at===null), visitor:visitorName({id:row.visitor_id,avatar_key:row.visitor_avatar_key||''}), totalCentavos:row.total_centavos, createdAt:row.created_at, lastMessage:row.last_message, unread:row.unread }
+  return { ...publicOrder(row,row.confirmed_at===null), visitor:visitorName({id:row.visitor_id,avatar_key:row.visitor_avatar_key||'',nickname:row.visitor_nickname}), totalCentavos:row.total_centavos, createdAt:row.created_at, lastMessage:row.last_message, unread:row.unread }
 }
 
 export function orderInbox(visitorId?:number){
   const rows=db().prepare(`
-    SELECT o.*, c.*, v.avatar_key AS visitor_avatar_key,
+    SELECT o.*, c.*, v.avatar_key AS visitor_avatar_key, v.nickname AS visitor_nickname,
       (SELECT text FROM order_messages WHERE order_id=o.id ORDER BY id DESC LIMIT 1) AS last_message,
       (SELECT count(*) FROM order_messages WHERE order_id=o.id AND id >
         CASE WHEN ? IS NULL THEN c.staff_read_message_id ELSE c.visitor_read_message_id END

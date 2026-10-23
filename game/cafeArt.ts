@@ -171,6 +171,20 @@ export function cupArt(id:DrinkId){
   return art.outline(INK)
 }
 
+// The CR in the front wall, beside the entrance: a plaque the scene letters "CR" with a light (green free, red busy),
+// over a wooden door that swings open while someone goes in or comes out.
+export function restroomDoorArt(open:boolean,busy:boolean){
+  const art=new PixelArt(36,16)
+  art.rect(0,9,36,7,'#7b5236').rect(0,9,36,1,'#94643f')
+  art.box(9,0,18,10,'#f7e3bd','#8a6446').rect(10,1,16,1,'#fff3d9')
+  art.rect(22,2,2,2,busy?'#e0533f':'#7cc46a').set(22,2,busy?'#ff9d8c':'#c4f0b0')
+  // Door posts either side, then the door: one wide leaf, swung back against the left post while open.
+  art.rect(1,11,2,5,WOOD_DARK).rect(33,11,2,5,WOOD_DARK)
+  if(open)art.rect(3,12,30,4,'#3a2a20').rect(3,12,5,4,WOOD).rect(3,12,5,1,WOOD_LIGHT)
+  else art.rect(3,12,30,4,WOOD).rect(3,12,30,1,WOOD_LIGHT).rect(3,15,30,1,WOOD_DARK).rect(17,13,2,2,WOOD_DARK).set(29,14,'#e9b84f')
+  return art
+}
+
 // A visitor waving: the store's standing body (or the street's seated one) with the right arm raised.
 export function wavingVisitorArt(id:HeadId,seated:boolean){
   const option=avatarOptions.find(a=>a.id===id)

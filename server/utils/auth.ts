@@ -69,8 +69,9 @@ export function requireVisitor(event: H3Event) {
   if (!visitor) throw createError({ statusCode: 401, statusMessage: 'Choose your avatar to enter the store' })
   return visitor
 }
-export function visitorName(visitor: { id: number; avatar_key: string }) {
-  const title=avatarOptions.find(avatar=>avatar.id===visitor.avatar_key)?.label || 'Guest'
+// "Name #012": the chosen name, or the food buddy's, then the visitor number that keeps every name unique.
+export function visitorName(visitor: { id: number; avatar_key: string; nickname?: string | null }) {
+  const title=visitor.nickname || avatarOptions.find(avatar=>avatar.id===visitor.avatar_key)?.label || 'Guest'
   return `${title} #${String(visitor.id).padStart(3,'0')}`
 }
 export function allowedOrigin(origin: string|null|undefined, host: string|null|undefined) {

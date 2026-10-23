@@ -10,6 +10,8 @@ export type VisitorRow = {
   created_at: number
   last_seen_at: number
   revoked_at: number | null
+  // The visitor's chosen name (see shared/nickname.ts), or null for the food buddy's name.
+  nickname: string | null
 }
 
 export type OrderRow = {
@@ -133,6 +135,8 @@ export function db() {
     connection.transaction(()=>{
       const columns=connection.pragma('table_info(orders)') as {name:string}[]
       if(!columns.some(column=>column.name==='delivered_at'))connection.exec('ALTER TABLE orders ADD COLUMN delivered_at INTEGER')
+      const visitorColumns=connection.pragma('table_info(visitors)') as {name:string}[]
+      if(!visitorColumns.some(column=>column.name==='nickname'))connection.exec('ALTER TABLE visitors ADD COLUMN nickname TEXT')
       const customerColumns=connection.pragma('table_info(customer_orders)') as {name:string}[]
       if(!customerColumns.some(column=>column.name==='confirmed_at')){
         connection.exec('ALTER TABLE customer_orders ADD COLUMN confirmed_at INTEGER')

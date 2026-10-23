@@ -48,7 +48,9 @@ test('Kape & Chits joins the world: linked doors, arrival spots and café seats'
   // The Tanaw Deck beside the café: the room spans both, and the deck has benches, a table and five railing spots.
   assert.equal(scenes.cafe.width,720);assert.equal(onSceneFloor('cafe',660,300),true);assert.equal(onSceneFloor('cafe',710,300),false)
   assert.equal(cafeSeats.filter(seat=>seat.x>360).length,11)
-  assert.deepEqual(cafeSeats.slice(14).map(seat=>seat.y),[300,300,300,300,300])
+  assert.deepEqual(cafeSeats.slice(14,19).map(seat=>seat.y),[300,300,300,300,300])
+  // The CR by the front door is the last seat.
+  assert.deepEqual(cafeSeats[cafeSeats.length-1],{x:80,y:540})
   assert.equal(new Set(cafeSeats.map(seat=>`${seat.x},${seat.y}`)).size,cafeSeats.length,'no two seats share a spot')
 })
 
@@ -56,7 +58,7 @@ test('the deck sky follows the Manila clock: morning, afternoon, sunset and a mo
   const dir=await mkdtemp(join(tmpdir(),'chits-sky-'))
   t.after(()=>rm(dir,{recursive:true,force:true}))
   await writeFile(join(dir,'scenery.mjs'),compile(await readFile(new URL('../game/scenery.ts',import.meta.url),'utf8')))
-  const {skyAt,skyPhase,sunArc,moonArc,mixColor,manilaMinute,SKY_PREVIEW}=await import(pathToFileURL(join(dir,'scenery.mjs')).href)
+  const {skyAt,skyPhase,sunArc,moonArc,mixColor,manilaMinute,SKY_PREVIEW,volcanoSmoke,SMOKE_WINDOW_MS}=await import(pathToFileURL(join(dir,'scenery.mjs')).href)
   assert.deepEqual([450,840,1065,1290,120].map(skyPhase),['morning','afternoon','sunset','night','night'])
   for(const [name,minute] of Object.entries(SKY_PREVIEW))assert.ok(Number.isInteger(minute)&&minute>=0&&minute<1440,name)
   // Every minute of the day blends to a valid sky; neighbouring minutes barely differ, so the change is gradual.
@@ -77,6 +79,15 @@ test('the deck sky follows the Manila clock: morning, afternoon, sunset and a mo
   assert.equal(sunArc(1290),undefined);assert.ok(moonArc(1290)>0&&moonArc(1290)<1)
   assert.ok(sunArc(720)>.4&&sunArc(720)<.6);assert.equal(moonArc(720),undefined)
   assert.equal(mixColor(0x000000,0xffffff,.5),0x808080)
+  // The volcano steams only sometimes: a plume in some windows, never sudden, the same for every device at the same time.
+  const day=Date.UTC(2026,9,23),step=2000,samples=[]
+  for(let now=day;now<day+86_400_000;now+=step)samples.push(volcanoSmoke(now))
+  const smoking=samples.filter(value=>value>0).length/samples.length
+  assert.ok(smoking>.08&&smoking<.4,`smoke ${Math.round(smoking*100)}% of the day`)
+  assert.ok(samples.every(value=>value>=0&&value<=1));assert.ok(samples.some(value=>value===1))
+  for(let i=1;i<samples.length;i++)assert.ok(Math.abs(samples[i]-samples[i-1])<=.26,'the plume eases in and out')
+  const windows=new Set();for(let now=day;now<day+86_400_000;now+=SMOKE_WINDOW_MS/10)if(volcanoSmoke(now)>0)windows.add(Math.floor(now/SMOKE_WINDOW_MS))
+  assert.ok(windows.size>40&&windows.size<240,`${windows.size} windows with a plume`)
   // 15:30 UTC is 23:30 in Manila (no daylight saving).
   assert.equal(manilaMinute(new Date('2026-10-23T15:30:00Z')),23*60+30)
 })
@@ -261,6 +272,12 @@ test('the café is one shared, always-open room with seats, drinks, actions and 
     c.send({type:'cafe_vote',mood:'lofi'});assert.equal((await wait(c,m=>m.type==='cafe_vote_rejected',fromC)).reason,'not_in_cafe')
     assert.equal(c.inbox.some(m=>m.type==='cafe_jukebox'),false)
     assert.equal(a.inbox.slice(fromA).some(m=>m.type==='players'&&'cafe' in m),false)
+    // The CR is one visitor at a time, and the server lets them out a few seconds after the game would have.
+    const fromCr=mark(a)
+    await walk(a,[[140,520],[80,540]])
+    a.send({type:'sit',seat:19})
+    await wait(a,m=>m.type==='player_pose'&&m.id===a.id&&m.seat===19,fromCr)
+    assert.deepEqual(await wait(a,m=>m.type==='player_pose'&&m.id===a.id&&m.pose==='stand',fromCr,1100),{type:'player_pose',id:a.id,pose:'stand'})
     // B leaves; the street's count follows.
     await delay(850);b.send({type:'scene',scene:'outside'})
     await wait(c,m=>m.type==='players'&&m.scene==='outside'&&m.cafe===1,fromC)

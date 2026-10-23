@@ -1,7 +1,7 @@
 import { activeVisitor, getVisitor, publicOrder, type OrderRow } from './db'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, AdminChatState } from '../../shared/chat'
-import { arrivalSpot, sceneLinked, sceneSeats, SEAT_REACH, type Pose, type SceneId } from '../../shared/world'
+import { arrivalSpot, CAFE_RESTROOM_SEAT, RESTROOM_MS, sceneLinked, sceneSeats, SEAT_REACH, type Pose, type SceneId } from '../../shared/world'
 import type { CafeAction, DrinkId } from '../../shared/cafe'
 import { isStoreOpen } from './store'
 
@@ -23,6 +23,8 @@ type Connection = {
   lastAct: number
   lastSceneChange: number
   lastMove: number
+  // When the visitor last went into the café's CR, so a timer only ever lets out that same visit.
+  restroomAt?: number
   lastChat: number
   chatWindowStart: number
   chatCount: number
@@ -113,6 +115,12 @@ export function broadcastPresence(){
   }
 }
 export function findMember(id: string) { return members.get(id) }
+// A visitor chose a new name: their connections carry it from now on, and everyone's player list shows it.
+export function renameVisitor(visitorId:number,nickname:string){
+  let changed=false
+  for(const member of members.values())if(member.visitorId===visitorId&&member.nickname!==nickname){member.nickname=nickname;changed=true}
+  if(changed)broadcastPresence()
+}
 // Whether this visitor (any of their connections) is standing in the scene right now.
 export function inScene(visitorId:number,scene:SceneId){for(const member of members.values())if(member.visitorId===visitorId)return member.scene===scene;return false}
 export function joinRoom(p: Connection) {
@@ -159,6 +167,11 @@ export function sitDown(p:Connection,seat:number){
   if(p.pose==='sit'&&p.seat===seat)return true
   p.x=spot.x;p.y=spot.y;p.pose='sit';p.seat=seat
   broadcastScene(p.scene,{type:'player_pose',id:p.id,pose:'sit',seat})
+  // The café's CR: the visitor's own game brings them out after RESTROOM_MS; if it doesn't (a hidden tab), this does.
+  if(p.scene==='cafe'&&seat===CAFE_RESTROOM_SEAT){
+    const entered=p.restroomAt=Date.now()
+    setTimeout(()=>{if(members.get(p.id)===p&&p.scene==='cafe'&&p.pose==='sit'&&p.seat===seat&&p.restroomAt===entered)standUp(p)},RESTROOM_MS+4000).unref()
+  }
   return true
 }
 export function standUp(p:Connection){

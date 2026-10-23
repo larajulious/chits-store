@@ -22,7 +22,7 @@ const guideEnabled=computed(()=>String(featureConfig.storeGuideEnabled)!=='false
 type Status = OrderStatus
 type PublicOrder = { id:number; number:string; name:string|null; status:Status }
 type MenuState = { date:string; version:string; items:{id:number;name:string;priceCentavos:number}[] }
-type Me = { nickname:string; avatar:string; storeOpen?:boolean }
+type Me = { nickname:string; name?:string; avatar:string; storeOpen?:boolean }
 const me=ref<Me|null>(null), board=ref<PublicOrder[]>([]), players=ref<Player[]>([]), selfId=ref('')
 const menu=ref<MenuState>({date:'',version:'',items:[]}),menuLoading=ref(false),menuError=ref('')
 const cart=ref<Record<number,number>>({}),placingOrder=ref(false),checkoutError=ref('')
@@ -84,10 +84,12 @@ const streetRain=ref(false)
 let cafeVoteTimeout:ReturnType<typeof setTimeout>|undefined
 const cafeCount=computed(()=>scene.value==='cafe'?scenePlayers.value.length:0)
 let cafeMusic:CafeMusic|undefined,lastCafeAct=0
-// Chat safety for this visitor only: hide someone's messages (by their guest name, which survives reconnects) or report a line to staff.
+// Chat safety for this visitor only: hide someone's messages (by their visitor number, which survives reconnects and renames) or report a line to staff.
 const mutedNames=ref<Set<string>>(new Set()),reportedIds=ref<Set<string>>(new Set()),chatMenuFor=ref('')
-const visibleChat=computed(()=>chat.value.filter(c=>c.role==='staff'||!mutedNames.value.has(c.nickname)))
-const isMutedSpeaker=(id:string)=>{const nickname=players.value.find(p=>p.id===id)?.nickname??[...chat.value].reverse().find(c=>c.id===id)?.nickname;return Boolean(nickname&&mutedNames.value.has(nickname))}
+// A mute holds on to the visitor number at the end of the name ("#012"), so it survives a change of name.
+const muteKey=(nickname:string)=>nickname.match(/#\d+$/)?.[0]??nickname
+const visibleChat=computed(()=>chat.value.filter(c=>c.role==='staff'||!mutedNames.value.has(muteKey(c.nickname))))
+const isMutedSpeaker=(id:string)=>{const nickname=players.value.find(p=>p.id===id)?.nickname??[...chat.value].reverse().find(c=>c.id===id)?.nickname;return Boolean(nickname&&mutedNames.value.has(muteKey(nickname)))}
 const leaveDialog=ref<{open:()=>void;close:()=>void}|null>(null),leaving=ref(false)
 const visitThanks=useState<boolean>('visit-thanks',()=>false)
 const feedbackBox=ref<{refresh:()=>Promise<void>}|null>(null)
@@ -388,7 +390,7 @@ function connect(){
     if(data.type==='chat'){
       const entry:ChatMessage={messageId:data.messageId,id:data.id,nickname:data.nickname,text:data.text,at:data.at,role:data.role==='staff'?'staff':'visitor',scene:isScene(data.scene)?data.scene:undefined}
       chat.value=[...chat.value.slice(-49),entry]
-      if(entry.role==='visitor'&&mutedNames.value.has(entry.nickname))return
+      if(entry.role==='visitor'&&mutedNames.value.has(muteKey(entry.nickname)))return
       if(entry.id!==selfId.value){
         if(overlay.value!=='chat'||chatTab.value!=='community'||document.hidden)unreadChat.value=Math.min(99,unreadChat.value+1)
         if(!document.hidden)playChatSound()
@@ -441,13 +443,23 @@ function connect(){
 function send(data:object){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(data))}
 function sendChat(){const text=message.value.trim();if(!connected.value||!text||text.length>160||!chatEnabled.value)return;send({type:'chat',text});message.value=''}
 function openChat(){chatTab.value='community';overlay.value='chat'}
+// A new name shows at once in the header; the room's player lists bring it to everyone's name tags.
+function onRenamed(result:{nickname:string;name:string}){if(me.value)me.value={...me.value,...result};overlay.value='';notice.value=`You're now ${result.nickname}.`}
+// Community chat opens at the newest line and follows new ones, unless the visitor has scrolled up to read
+// (their own messages always bring them back down).
+const chatFeed=ref<HTMLElement|null>(null)
+let chatPinned=true
+function onChatScroll(){const el=chatFeed.value;if(el)chatPinned=el.scrollHeight-el.scrollTop-el.clientHeight<24}
+async function scrollChatToEnd(){await nextTick();const el=chatFeed.value;if(el){el.scrollTop=el.scrollHeight;chatPinned=true}}
+watch([overlay,chatTab],([value,tab])=>{if(value==='chat'&&tab==='community')void scrollChatToEnd()})
+watch(visibleChat,lines=>{if(overlay.value==='chat'&&chatTab.value==='community'&&(chatPinned||lines.at(-1)?.id===selfId.value))void scrollChatToEnd()})
 // A conversation starter from the chika board goes into the chat box, cursor at the end; the visitor sends it themselves.
 async function useStarter(text:string){
   message.value=text.slice(0,160)
   openChat();await nextTick()
   const input=chatInput.value;if(input){input.focus();input.setSelectionRange(input.value.length,input.value.length)}
 }
-function muteSpeaker(nickname:string){mutedNames.value=new Set([...mutedNames.value,nickname]);chatMenuFor.value='';notice.value=`${nickname} is muted for you. Their messages are hidden.`}
+function muteSpeaker(nickname:string){mutedNames.value=new Set([...mutedNames.value,muteKey(nickname)]);chatMenuFor.value='';notice.value=`${nickname} is muted for you. Their messages are hidden.`}
 function unmuteAll(){mutedNames.value=new Set()}
 function reportLine(messageId:string){chatMenuFor.value='';if(!reportedIds.value.has(messageId))send({type:'report',messageId})}
 // Barista: the cup is made in the scene (brew, serve, hand over); the server then shares it with the café.
@@ -524,7 +536,7 @@ async function leave(){
 </script>
 <template><main ref="shell" class="game-shell structured-store" :class="{'is-fullscreen':fullscreen}">
   <header class="structured-store-top">
-    <div class="visitor-identity"><span class="visitor-portrait"><PixelSprite :name="`head-${visitorAvatar}`" :scale="2"/></span><div class="visitor-copy"><span>{{ scene==='outside'?'NEIGHBORHOOD':scene==='cafe'?'KAPE & CHITS':'CHITS STORE' }}</span><strong :title="me?.nickname">{{ me?.nickname || 'Guest' }}</strong></div></div>
+    <button type="button" class="visitor-identity" :aria-label="`${me?.nickname||'Guest'}. Change your name`" :disabled="!me" @click="overlay='nickname'"><span class="visitor-portrait"><PixelSprite :name="`head-${visitorAvatar}`" :scale="2"/></span><span class="visitor-copy"><span>{{ scene==='outside'?'NEIGHBORHOOD':scene==='cafe'?'KAPE & CHITS':'CHITS STORE' }}</span><strong :title="me?.nickname">{{ me?.nickname || 'Guest' }}<StoreGlyph name="pencil"/></strong></span></button>
     <button v-if="fullscreenSupported" type="button" class="fullscreen-toggle" :aria-label="fullscreen?'Exit fullscreen':'Play fullscreen'" :aria-pressed="fullscreen" :title="fullscreen?'Exit fullscreen (Esc)':'Fullscreen'" @click="toggleFullscreen"><StoreGlyph :name="fullscreen?'collapse':'expand'"/></button>
     <div class="visit-status">
       <span class="connection-pill" :class="{ready:connected}" role="status"><span class="connection-dot" aria-hidden="true"/>{{ connected?`${online} online`:'Connecting' }}</span>
@@ -558,9 +570,10 @@ async function leave(){
     <div v-else-if="catEnabled" class="structured-hint"><p class="cat-hint-copy"><span class="cat-hint-faces"><PixelSprite name="cat-face" :scale="2"/><PixelSprite name="onay-face" :scale="2"/></span><span>Drag yarn · tap Miming or Onay to pet</span></p><button type="button" class="cat-action toss-yarn" aria-label="Toss yarn for Miming and Onay, the shop cats" :disabled="!!overlay" @click="game?.tossYarn()"><StoreGlyph name="yarn"/>Toss yarn</button></div>
     <div v-if="overlay" class="overlay-shade" :class="{'chat-overlay':overlay==='chat'||overlay==='jukebox'}" @click.self="overlay=''">
       <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback','chat-dialog':overlay==='chat','jukebox-dialog':overlay==='jukebox','order-chat-dialog':overlay==='chat'&&chatTab==='orders'&&!!selectedOrderId}" role="dialog" aria-labelledby="store-dialog-title">
-        <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ overlay==='chat'?(chatTab==='orders'?'Order inbox':'Community chat'):{menu:"Today's Menu",board:'Live Order Board',cashier:'Staff',chef:'Chef',emotes:'Reactions',feedback:'Feedback box',jukebox:'Jukebox',services:'App development',vending:'Vending machine',barista:'Barista','cafe-board':'Chika board','cafe-jukebox':'Café jukebox'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
+        <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ overlay==='chat'?(chatTab==='orders'?'Order inbox':'Community chat'):{menu:"Today's Menu",board:'Live Order Board',cashier:'Staff',chef:'Chef',emotes:'Reactions',feedback:'Feedback box',jukebox:'Jukebox',services:'App development',vending:'Vending machine',barista:'Barista','cafe-board':'Chika board','cafe-jukebox':'Café jukebox',nickname:'Your name'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
         <FeedbackBox v-if="overlay==='feedback'" ref="feedbackBox"/>
         <VendingPanel v-if="overlay==='vending'" :menu-available="storeOpen" @vend="game?.vend()" @menu="interact('menu')"/>
+        <NicknamePanel v-if="overlay==='nickname'&&me" :name="me.name??''" :nickname="me.nickname" :avatar="me.avatar" @saved="onRenamed"/>
         <CafeBaristaPanel v-if="overlay==='barista'" :holding="selfDrink" @choose="chooseDrink"/>
         <CafeBoardPanel v-if="overlay==='cafe-board'" @use="useStarter"/>
         <CafeJukeboxPanel v-if="overlay==='cafe-jukebox'" :state="cafeJukebox" :my-vote="cafeVote" :pending-vote="cafePendingVote" :message="cafeVoteMessage" :status="cafeStatus" :music-on="musicOn" :volume="cafeVolume" :server-now="jukeboxClock" :connected="connected" @vote="voteCafeMood" @toggle="toggleMusic" @volume="setCafeVolume"/>
@@ -589,7 +602,7 @@ async function leave(){
         <template v-else-if="overlay==='emotes'"><div class="reaction-grid"><button v-for="reaction in reactionOptions" :key="reaction.emoji" type="button" class="btn secondary reaction-choice" @click="send({type:'emote',emoji:reaction.emoji});overlay=''"><PixelReaction class="reaction-symbol" :emoji="reaction.emoji"/><span>{{ reaction.label }}</span></button></div></template>
         <template v-else-if="overlay==='chat'">
           <div v-if="storeOpen" class="chat-tabs" role="tablist" aria-label="Chat conversations"><button type="button" role="tab" :aria-selected="chatTab==='community'" @click="chatTab='community'">Community <span v-if="unreadChat">{{ unreadChat }}</span></button><button type="button" role="tab" :aria-selected="chatTab==='orders'" @click="chatTab='orders';void loadOrderInbox()">Order inbox <span v-if="privateUnread">{{ privateUnread }}</span></button></div>
-          <template v-if="chatTab==='community'"><div class="chat-messages" aria-live="polite"><div v-if="visibleChat.length===0" class="muted help-text chat-empty">Say hello! Chat messages are temporary.</div><div v-for="c in visibleChat" :key="c.messageId" class="chat-line" :class="{'staff-reply':c.role==='staff'}"><span v-if="c.role==='staff'" class="chat-staff-tag">STAFF</span><span v-else-if="c.scene&&c.scene!==scene" class="chat-staff-tag chat-place-tag">{{ scenes[c.scene].label.toUpperCase() }}</span><strong>{{ c.nickname }}:</strong> {{ c.text }}<button v-if="c.role==='visitor'&&c.id!==selfId" type="button" class="chat-line-more" :aria-expanded="chatMenuFor===c.messageId" :aria-label="`Options for ${c.nickname}'s message`" @click="chatMenuFor=chatMenuFor===c.messageId?'':c.messageId">⋯</button><span v-if="chatMenuFor===c.messageId" class="chat-line-menu"><button type="button" @click="muteSpeaker(c.nickname)">Mute {{ c.nickname }}</button><button type="button" :disabled="reportedIds.has(c.messageId)" @click="reportLine(c.messageId)">{{ reportedIds.has(c.messageId)?'Reported':'Report' }}</button></span></div></div><p v-if="mutedNames.size" class="privacy">You muted {{ mutedNames.size }} {{ mutedNames.size===1?'visitor':'visitors' }}. <button type="button" class="chat-unmute" @click="unmuteAll">Unmute all</button></p><form class="chat-form" @submit.prevent="sendChat"><input ref="chatInput" v-model="message" class="input" maxlength="160" aria-label="Chat message" placeholder="Say hi..." autocomplete="off"><button class="btn small" type="submit" :disabled="!connected||!message.trim()||!chatEnabled">Send</button></form><p v-if="!chatEnabled" class="privacy">Chat is temporarily disabled by staff.</p><p class="privacy">Public room, shared in the store, the café and out on the street: do not share personal details. Use ⋯ to mute or report someone; staff can mute or remove visitors. Chat is not permanently stored.</p></template>
+          <template v-if="chatTab==='community'"><div ref="chatFeed" class="chat-messages" aria-live="polite" @scroll.passive="onChatScroll"><div v-if="visibleChat.length===0" class="muted help-text chat-empty">Say hello! Chat messages are temporary.</div><div v-for="c in visibleChat" :key="c.messageId" class="chat-line" :class="{'staff-reply':c.role==='staff'}"><span v-if="c.role==='staff'" class="chat-staff-tag">STAFF</span><span v-else-if="c.scene&&c.scene!==scene" class="chat-staff-tag chat-place-tag">{{ scenes[c.scene].label.toUpperCase() }}</span><strong>{{ c.nickname }}:</strong> {{ c.text }}<button v-if="c.role==='visitor'&&c.id!==selfId" type="button" class="chat-line-more" :aria-expanded="chatMenuFor===c.messageId" :aria-label="`Options for ${c.nickname}'s message`" @click="chatMenuFor=chatMenuFor===c.messageId?'':c.messageId">⋯</button><span v-if="chatMenuFor===c.messageId" class="chat-line-menu"><button type="button" @click="muteSpeaker(c.nickname)">Mute {{ c.nickname }}</button><button type="button" :disabled="reportedIds.has(c.messageId)" @click="reportLine(c.messageId)">{{ reportedIds.has(c.messageId)?'Reported':'Report' }}</button></span></div></div><p v-if="mutedNames.size" class="privacy">You muted {{ mutedNames.size }} {{ mutedNames.size===1?'visitor':'visitors' }}. <button type="button" class="chat-unmute" @click="unmuteAll">Unmute all</button></p><form class="chat-form" @submit.prevent="sendChat"><input ref="chatInput" v-model="message" class="input" maxlength="160" aria-label="Chat message" placeholder="Say hi..." autocomplete="off"><button class="btn small" type="submit" :disabled="!connected||!message.trim()||!chatEnabled">Send</button></form><p v-if="!chatEnabled" class="privacy">Chat is temporarily disabled by staff.</p><p class="privacy">Public room, shared in the store, the café and out on the street: do not share personal details. Use ⋯ to mute or report someone; staff can mute or remove visitors. Chat is not permanently stored.</p></template>
           <template v-else><div v-if="myOrders.length" class="order-inbox-list"><button v-for="order in myOrders" :key="order.id" type="button" :class="{selected:selectedOrderId===order.id}" @click="openOrder(order.id)"><strong>#{{ order.number }} <span v-if="order.unread" class="order-inbox-unread">{{ order.unread }}</span></strong><small>{{ orderStatusLabels[order.status] }} · {{ money(order.totalCentavos) }}</small></button></div><p v-else class="menu-message">Your placed orders will appear here. Choose items from Today’s Menu to start.</p>
             <p v-if="orderInboxLoading" class="help-text">Opening order conversation…</p>
             <template v-if="orderDetail&&selectedOrderId===orderDetail.order.id"><details class="order-chat-summary"><summary><span><strong>Order #{{ orderDetail.order.number }}{{ orderDetail.order.name?` · ${orderDetail.order.name}`:'' }}</strong> · {{ orderStatusLabels[orderDetail.order.status] }} · {{ money(orderDetail.order.totalCentavos) }}</span><small>Items ▾</small></summary><div v-for="item in orderDetail.items" :key="item.id"><span>{{ item.quantity }} × {{ item.name }}</span><span>{{ money(item.lineTotalCentavos) }}</span></div></details><div ref="orderFeed" class="chat-messages order-chat-messages" role="log" aria-label="Private order conversation" aria-live="polite"><div v-for="entry in orderDetail.messages" :key="entry.id" class="chat-line" :class="{'staff-reply':entry.role==='staff'}"><strong>{{ entry.role==='system'?'Order':entry.role==='staff'?'Chits Store':'You' }}:</strong> {{ entry.text }}</div></div><form class="chat-form" @submit.prevent="sendOrderChat"><input v-model="orderMessage" class="input" maxlength="500" aria-label="Message staff about this order" placeholder="Message staff about this order…" autocomplete="off"><button class="btn small" type="submit" :disabled="orderSending||!orderMessage.trim()">{{ orderSending?'Sending…':'Send' }}</button></form><p class="privacy">Only you and store staff can see this order conversation.</p></template>
@@ -661,6 +674,10 @@ async function leave(){
 .fullscreen-toggle:focus-visible{outline:3px solid #617e4d;outline-offset:2px}
 .structured-store.is-fullscreen{width:100%;height:100%;min-height:0;margin:0;border:0;border-radius:0;box-shadow:none}
 @media(prefers-reduced-motion:reduce){.fullscreen-toggle:active{transform:none}}
+/* Your name in the header opens the name dialog; the pencil says so. */
+button.visitor-identity{padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}button.visitor-identity:disabled{opacity:1;cursor:default}
+.visitor-identity .visitor-copy>strong{display:flex;align-items:center;gap:6px}.visitor-copy>strong svg{flex-shrink:0;width:13px;height:13px;color:#a8835f}
+button.visitor-identity:focus-visible{outline:3px solid #617e4d;outline-offset:3px;border-radius:6px}
 /* Kape & Chits: the café button on the street, the in-café action bar, and per-line chat options. */
 .go-cafe{--shade:#c9a06c;border-color:#8a6446;background:#f6e3c4;color:#5e3d27}
 .cafe-hint{align-items:center}

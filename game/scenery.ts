@@ -57,3 +57,20 @@ export function manilaMinute(now=new Date()){
 }
 // ?time= previews on the store page: a fixed minute for each named time of day.
 export const SKY_PREVIEW:Record<string,number>={morning:450,day:600,afternoon:840,dusk:1060,sunset:1065,night:1290}
+
+// The volcano steams now and then. Each five-minute window of the clock either has a plume (about half do) or not;
+// a plume lasts one to two and a half minutes somewhere in its window and eases in and out over eight seconds.
+// It follows the wall clock, so everyone on the deck sees the same plume at about the same time. 0..1 strength.
+export const SMOKE_WINDOW_MS=300_000
+const SMOKE_EASE_MS=8000
+function mix32(value:number){
+  let h=Math.imul(value^0x9e3779b9,0x85ebca6b);h^=h>>>13;h=Math.imul(h,0xc2b2ae35);h^=h>>>16
+  return h>>>0
+}
+export function volcanoSmoke(now:number){
+  const window=Math.floor(now/SMOKE_WINDOW_MS),seed=mix32(window)
+  if(seed%100>=50)return 0
+  const length=60_000+(seed>>>8)%90_000,start=(seed>>>4)%(SMOKE_WINDOW_MS-length),t=now-window*SMOKE_WINDOW_MS-start
+  if(t<0||t>length)return 0
+  return Math.round(Math.min(1,t/SMOKE_EASE_MS,(length-t)/SMOKE_EASE_MS)*100)/100
+}

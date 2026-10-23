@@ -40,11 +40,13 @@ export function onSceneFloor(scene:SceneId,x:number,y:number){
 export const benchSeats:readonly Point[]=[{x:100,y:300},{x:140,y:300}]
 // Kape & Chits, inside: two chairs behind each of three tables (0-5), then the two sofa seats in the lounge corner (6, 7).
 // On the deck: two benches facing the view (8-11), a table for two (12, 13), and five spots to lean on the railing
-// (14-18), which are seats too, so only one visitor leans at each.
+// (14-18), which are seats too, so only one visitor leans at each. Last, the CR by the front door (19): also a seat,
+// so one visitor at a time; they come back out after RESTROOM_MS (the server lets them out a little later regardless).
 // Grid points (multiples of 20) so a walk ends exactly on the seat.
 export const cafeSeats:readonly Point[]=[{x:80,y:360},{x:120,y:360},{x:80,y:460},{x:120,y:460},{x:220,y:400},{x:260,y:400},{x:260,y:280},{x:300,y:280},
   {x:440,y:400},{x:480,y:400},{x:600,y:400},{x:640,y:400},{x:520,y:500},{x:560,y:500},
-  {x:420,y:300},{x:480,y:300},{x:540,y:300},{x:600,y:300},{x:660,y:300}]
+  {x:420,y:300},{x:480,y:300},{x:540,y:300},{x:600,y:300},{x:660,y:300},{x:80,y:540}]
+export const CAFE_RESTROOM_SEAT=19,RESTROOM_MS=6000
 export const sceneSeats:Record<SceneId,readonly Point[]>={store:[],outside:benchSeats,cafe:cafeSeats}
 // How far from the seat's floor spot a sit request is still believed (moves are sent about every 90 ms).
 export const SEAT_REACH=40

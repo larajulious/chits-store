@@ -547,6 +547,8 @@ class NeighborhoodScene extends Phaser.Scene{
       if(own){this.self.sprite.setPosition(own.x,own.y);this.lastX=own.x;this.lastY=own.y;this.path=[];this.afterPath=undefined;this.standUp(false)}
     }
     this.selfId=selfId
+    // A visitor can change their name mid-visit (see /api/me/nickname); the next list carries it to every name tag.
+    for(const p of players){const visitor=p.id===selfId?this.self:this.remotes.get(p.id);if(visitor&&visitor.label.text!==p.nickname){visitor.label.setText(p.nickname);}}
     const incoming=new Set(players.filter(p=>p.id!==selfId).map(p=>p.id))
     for(const [id,p] of this.remotes)if(!incoming.has(id)){p.sprite.destroy();p.label.destroy();p.bubble?.destroy();p.umbrella?.destroy();this.remotes.delete(id)}
     for(const p of players){if(p.id===selfId)continue

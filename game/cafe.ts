@@ -1,12 +1,12 @@
 import Phaser from 'phaser'
 import {avatarOptions,type AvatarId} from '../shared/avatars'
-import {cafeSeats,scenes,type Pose} from '../shared/world'
+import {CAFE_RESTROOM_SEAT,RESTROOM_MS,cafeSeats,scenes,type Pose} from '../shared/world'
 import {drinkOptions,isDrink,type CafeAction,type CafeMood,type DrinkId} from '../shared/cafe'
 import * as art from './pixelArt'
 import * as cafe from './cafeArt'
 import * as deck from './deckArt'
 import {bigPotArt,glowArt,lightPoolArt,sittingVisitorArt} from './neighborhoodArt'
-import {manilaMinute,mixColor,moonArc,skyAt,skyPhase,sunArc,type Sky,type SkyPhase} from './scenery'
+import {manilaMinute,mixColor,moonArc,skyAt,skyPhase,sunArc,volcanoSmoke,type Sky,type SkyPhase} from './scenery'
 import {BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,MIN_VIEW_W,NAME_TAG_GAP,PX,TAG_FONT,Tag,addTexture,characterPhase,createReactionTextures,currentDaylight,drawRain,findPath,reactionTexture,setDepthIfChanged,slideDoor,tagDepth,tapSparks,visitorFrame,type Daylight,type Player,type WorldGame} from './common'
 
 // Kape & Chits: the 24/7 coffee tambayan next to the store, its own Phaser game like the street.
@@ -18,17 +18,19 @@ type Options = {nickname:string;avatar:AvatarId;onMove:(x:number,y:number)=>void
   onDrink:(drink:DrinkId)=>void;onAct:(action:CafeAction)=>void;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;daylight?:Daylight;skyMinute?:number;viewWidth?:number}
 // lift: how far the art is drawn above the network position. The *Until times drive short, local animations.
 type Visitor = {sprite:Phaser.GameObjects.Image;label:Tag;avatar:string;name:string;phase:number;movingUntil:number;bubble?:Tag|Phaser.GameObjects.Image;pose:Pose;seat?:number;sitSince:number;lift:number;
-  drink?:DrinkId;cup?:Phaser.GameObjects.Image;umbrella?:Phaser.GameObjects.Image;sipUntil:number;relaxUntil:number;laughUntil:number;waveUntil:number}
+  drink?:DrinkId;cup?:Phaser.GameObjects.Image;umbrella?:Phaser.GameObjects.Image;sipUntil:number;
+  // 0..1: how far into the CR (out of sight) the visitor is.
+  hidden:number;relaxUntil:number;laughUntil:number;waveUntil:number}
 
 const {width:W,height:H,floor,spawn}=scenes.cafe,CELL=20
 const DOOR={x:180,standY:540,halfWidth:46,pushMs:220,triggerY:536}
 const SIT_MS=220
 // Seats (see cafeSeats): chairs behind the three café tables and the deck's table, the sofa, the deck benches and
 // the railing spots. lift draws the visitor up onto the seat; back seats show the visitor from behind, facing the view.
-type SeatKind='chair'|'sofa'|'bench'|'rail'
+type SeatKind='chair'|'sofa'|'bench'|'rail'|'restroom'
 const TABLES=[{x:100,y:364,variant:0},{x:100,y:464,variant:1},{x:240,y:404,variant:2},{x:540,y:504,variant:1}] as const
-const seatLayout=(i:number):{kind:SeatKind;table?:number}=>i<6?{kind:'chair',table:Math.floor(i/2)}:i<8?{kind:'sofa'}:i<12?{kind:'bench'}:i<14?{kind:'chair',table:3}:{kind:'rail'}
-const LIFT:Record<SeatKind,number>={chair:24,sofa:32,bench:22,rail:0}
+const seatLayout=(i:number):{kind:SeatKind;table?:number}=>i<6?{kind:'chair',table:Math.floor(i/2)}:i<8?{kind:'sofa'}:i<12?{kind:'bench'}:i<14?{kind:'chair',table:3}:i<CAFE_RESTROOM_SEAT?{kind:'rail'}:{kind:'restroom'}
+const LIFT:Record<SeatKind,number>={chair:24,sofa:32,bench:22,rail:0,restroom:0}
 const SEATS=cafeSeats.map((spot,i)=>{const layout=seatLayout(i);return {...spot,...layout,lift:LIFT[layout.kind],back:layout.kind==='bench'||layout.kind==='rail'}})
 const seatsOf=(kind:SeatKind)=>SEATS.flatMap((seat,i)=>seat.kind===kind?[i]:[])
 const RAIL_SEATS=seatsOf('rail'),BENCH_SEATS=seatsOf('bench')
@@ -40,6 +42,9 @@ const BOARD={area:new Phaser.Geom.Rectangle(290,88,64,92),standX:320,standY:300}
 const WINDOW_AREA=new Phaser.Geom.Rectangle(cafe.CAFE_WINDOW_GLASS.x*PX-6,cafe.CAFE_WINDOW_GLASS.y*PX-6,cafe.CAFE_WINDOW_GLASS.w*PX+12,cafe.CAFE_WINDOW_GLASS.h*PX+16)
 const JUKEBOX={x:322,y:486,standX:280,standY:500}
 const PLANT={x:36,y:516}
+// The CR's door in the front wall, left of the entrance; its spot on the floor is seat CAFE_RESTROOM_SEAT.
+const CR={x:80,y:564,area:new Phaser.Geom.Rectangle(42,538,76,42)}
+const CR_LINES=['Ahh, ginhawa!','Ayan, okay na.','Balik tambay!','Hugas kamay, check!']
 // The Tanaw Deck: the view above the railing (world y below RAIL_Y), two benches facing it, pots in the front corners,
 // and a string of lights between two posts at the railing's ends.
 const DECK_LEFT=372,RAIL_Y=300
@@ -72,7 +77,7 @@ function pathFind(start:Phaser.Math.Vector2,target:Phaser.Math.Vector2){return f
 const pick=<T>(lines:readonly T[])=>lines[Math.floor(Math.random()*lines.length)]!
 const shortName=(name:string)=>name.length>12?`${name.slice(0,11).trimEnd()}…`:name
 // The barista chats now and then, greets newcomers by name, and answers taps.
-const BARISTA_IDLE_LINES=['Fresh brew, libre lahat!','Tambay lang, walang bayad!','Kape muna bago lahat.','Need a refill? Tap me!','Upo ka muna, relax lang.','Try the chika board for kwentuhan!','Music? Tap the jukebox!','Open kami 24/7, promise!','Silipin mo ang view sa deck!','Dalhin mo ang kape mo sa deck!']
+const BARISTA_IDLE_LINES=['Fresh brew, libre lahat!','Tambay lang, walang bayad!','Kape muna bago lahat.','Need a refill? Tap me!','Upo ka muna, relax lang.','Try the chika board for kwentuhan!','Music? Tap the jukebox!','Open kami 24/7, promise!','Silipin mo ang view sa deck!','Dalhin mo ang kape mo sa deck!','May CR kami sa harap, katabi ng pinto.']
 const BARISTA_WELCOME=['Pasok po! Welcome sa Kape & Chits!','Uy, welcome! Kape tayo?']
 const BARISTA_HELLO=['Welcome, {name}!','Hi {name}! Kape?','Uy {name}, upo ka!']
 const BARISTA_NEAR=['Hi! Tap me for a free kape.','Kape? Libre lang!']
@@ -88,8 +93,11 @@ const VIEW_LINES:Record<SkyPhase,string[]>={
   night:['Ang calming ng moonlight tonight.','Ang ganda ng buwan ngayong gabi.','Tahimik. Sarap tumambay dito.'],
 }
 const RAIN_LINES=['Umuulan! Sarap magkape.','Ulan, kape at kwentuhan. Perfect.','Ang lamig ng hangin sa ulan.']
+const SMOKE_LINES=['Uy, may usok ang bulkan. Ang ganda tingnan.','Nag-steam na naman ang bulkan.']
+// The notch of the island's crater (world units): where the plume rises from, just inside it so the island hides its base.
+const CRATER={x:561,y:234}
 // The view's layers, back to front, all below the deck floor and the room art's furniture.
-const SKY_DEPTH={sky:.1,stars:.12,glow:.14,sun:.15,cloud:.2,far:.3,lake:.35,island:.4,near:.45,lights:.5,floor:.9,shade:.95,wall:1}
+const SKY_DEPTH={sky:.1,stars:.12,glow:.14,sun:.15,cloud:.2,far:.3,lake:.35,smoke:.38,island:.4,near:.45,lights:.5,floor:.9,shade:.95,wall:1}
 
 // A grey texture painted in one colour, like a tint. Painting the pixels looks the same in WebGL and in Phaser's Canvas
 // renderer (which low-end devices fall back to, and which ignores tints), and only happens when the colour changes.
@@ -165,6 +173,8 @@ class CafeScene extends Phaser.Scene{
   private deckShade?:Phaser.GameObjects.Graphics
   private wire?:Phaser.GameObjects.Graphics
   private fxFrame=-2
+  private smokeGfx?:Phaser.GameObjects.Graphics
+  private smokeKey=-2
   private sun?:{body:Phaser.GameObjects.Image;glow:Phaser.GameObjects.Image}
   private moon?:{body:Phaser.GameObjects.Image;glow:Phaser.GameObjects.Image}
   private clouds:{image:Phaser.GameObjects.Image;speed:number;offset:number}[]=[]
@@ -174,6 +184,7 @@ class CafeScene extends Phaser.Scene{
   private deckPools:Phaser.GameObjects.Image[]=[]
   private doorwayGlow?:Phaser.GameObjects.Image
   private patioUmbrellas:Phaser.GameObjects.Image[]=[]
+  private crDoor?:Phaser.GameObjects.Image
   private onDeck=false
   private nextViewThought=0
   constructor(opts:Options){super('Cafe');this.opts=opts;this.zoom=opts.zoom??1}
@@ -217,6 +228,8 @@ class CafeScene extends Phaser.Scene{
     this.notes=[0,1,2].map(()=>this.sprite(JUKEBOX.x,JUKEBOX.y,'music-note',640).setVisible(false))
     // The front door onto the street, as in the store.
     this.sprite(180,564,'entrance',1000)
+    this.crDoor=this.sprite(CR.x,CR.y,'cr-closed-free',1000)
+    this.text(CR.x-4,CR.y-7,'CR',8,'#5e3d27',1001)
     this.text(180,559,'GO OUTSIDE',8,'#5e3d27',1001)
     this.doorLight=this.add.graphics().setDepth(1001).setAlpha(0)
     this.door=this.sprite(DOOR.x,576,`${this.doorPrefix}-${this.opts.arriving?3:0}`,1002)
@@ -245,7 +258,7 @@ class CafeScene extends Phaser.Scene{
     this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>this.tap(pointer.worldX,pointer.worldY))
   }
   private visitor(sprite:Phaser.GameObjects.Image,name:string,avatar:string,phase:number):Visitor{
-    return {sprite,label:this.tag(sprite.x,sprite.y-NAME_TAG_GAP,name).setDepth(tagDepth(sprite.y)),avatar,name,phase,movingUntil:0,pose:'stand',sitSince:-Infinity,lift:0,sipUntil:0,relaxUntil:0,laughUntil:0,waveUntil:0}
+    return {sprite,label:this.tag(sprite.x,sprite.y-NAME_TAG_GAP,name).setDepth(tagDepth(sprite.y)),avatar,name,phase,movingUntil:0,pose:'stand',sitSince:-Infinity,lift:0,sipUntil:0,relaxUntil:0,laughUntil:0,waveUntil:0,hidden:0}
   }
   // ---------- The Tanaw Deck ----------
   // Sky and lake (one Graphics), sun and moon, clouds, then the far ridge, the island and the near hills, tinted for the hour.
@@ -262,6 +275,7 @@ class CafeScene extends Phaser.Scene{
     this.sun=orb('deck-sun');this.moon=orb('deck-moon')
     this.clouds=[{y:44,speed:3,offset:120},{y:96,speed:2,offset:560}].map(c=>({image:this.sprite(0,c.y,'deck-cloud',D.cloud),speed:c.speed,offset:c.offset}))
     this.lakeFx=this.add.graphics().setDepth(D.lake)
+    this.smokeGfx=this.add.graphics().setDepth(D.smoke)
     image(deck.VIEW_LEFT,210,'ridge-far',D.far,1)
     this.add.image(556,252,'taal').setOrigin(.5,1).setScale(PX).setDepth(D.island)
     image(deck.VIEW_LEFT,316,'hills-near',D.near,1);image(W,290,'hillside',D.near)
@@ -335,6 +349,7 @@ class CafeScene extends Phaser.Scene{
       if(bulb.alpha!==alpha)bulb.setAlpha(alpha)
     })
     this.updateRain()
+    this.updateSmoke()
     const frame=motion?Math.floor(now/400):-1
     if(frame===this.fxFrame)return
     this.fxFrame=frame
@@ -370,11 +385,30 @@ class CafeScene extends Phaser.Scene{
     if(frame===-3){fx.clear();return}
     drawRain(fx,{x:DECK_LEFT,y:0,width:deck.VIEW_ART_W*PX-(DECK_LEFT-deck.VIEW_LEFT),height:H},RAIL_Y,frame)
   }
+  // The volcano's plume (see volcanoSmoke): pixel puffs rising from the crater, growing, drifting with the wind and
+  // fading, in the sky's colours. Five frames a second; a still plume with reduced motion.
+  private updateSmoke(){
+    const g=this.smokeGfx,motion=!this.opts.reducedMotion
+    if(!g)return
+    const strength=volcanoSmoke(Date.now()),frame=strength<=0?-3:motion?Math.floor(this.time.now/200):-1
+    const key=frame===-3?-3:frame*100+Math.round(strength*20)
+    if(key===this.smokeKey)return
+    this.smokeKey=key;g.clear()
+    if(frame===-3)return
+    const sky=this.sky,night=sky.dark>.3,color=night?mixColor(sky.mid,0xffffff,.45):mixColor(0xfafafa,sky.horizon,.2)
+    const snap=(value:number)=>Math.round(value/PX)*PX,cycle=8000,clock=motion?this.time.now:2600
+    for(let i=0;i<9;i++){
+      const p=((clock+i*cycle/9)%cycle)/cycle,r=snap(4+p*13),x=snap(CRATER.x+p*p*40+Math.sin(p*5+i)*3),y=snap(CRATER.y-p*100)
+      g.fillStyle(color,strength*(night?.5:.8)*(p<.1?p/.1:1-(p-.1)/.9))
+      for(let dy=-r;dy<=r;dy+=PX){const half=snap(Math.sqrt(Math.max(0,r*r-dy*dy)));if(half)g.fillRect(x-half,y+dy,half*2,PX)}
+    }
+  }
   // A thought for the view, at most every 45 seconds unless the visitor just settled at the railing or on a bench.
   private thinkAboutView(settled=false){
     if(!settled&&this.time.now<this.nextViewThought)return
     this.nextViewThought=this.time.now+45_000
-    this.say(pick(this.music==='rain'?RAIN_LINES:VIEW_LINES[this.phase]),3200)
+    const smoking=this.music!=='rain'&&volcanoSmoke(Date.now())>.3&&Math.random()<.5
+    this.say(pick(this.music==='rain'?RAIN_LINES:smoking?SMOKE_LINES:VIEW_LINES[this.phase]),3200)
   }
   // The page's View button, or a tap on the view: walk to the nearest free spot at the railing (or a bench) and take it in.
   enjoyView(){
@@ -401,6 +435,7 @@ class CafeScene extends Phaser.Scene{
       texture(`${id}-lean`,deck.backVisitorArt(id,'lean'));texture(`${id}-lean-wave`,deck.backVisitorArt(id,'lean',true))
       texture(`${id}-back-sit`,deck.backVisitorArt(id,'sit'));texture(`${id}-back-sit-wave`,deck.backVisitorArt(id,'sit',true))
     }
+    for(const open of [false,true])for(const busy of [false,true])texture(`cr-${open?'open':'closed'}-${busy?'busy':'free'}`,cafe.restroomDoorArt(open,busy))
     texture('deck-moon',deck.moonArt());texture('patio-umbrella',deck.patioUmbrellaArt());texture('hand-umbrella',deck.handUmbrellaArt())
     texture('deck-floor',deck.deckFloorArt());texture('deck-wall',deck.partitionArt());texture('deck-sign',deck.deckSignArt());texture('deck-post',deck.lightPostArt())
     texture('bench-seat',deck.benchSeatArt());texture('bench-back',deck.benchBackArt());texture('light-pool',lightPoolArt())
@@ -422,6 +457,7 @@ class CafeScene extends Phaser.Scene{
     // The view above the deck's railing: walk over and take it in.
     if(x>=DECK_LEFT&&y<RAIL_Y-8){spark();this.enjoyView();return}
     if(x<0||x>W){const p=nearestOpen(x,y);if(p){spark();this.walkTo(p.x,p.y)}return}
+    if(CR.area.contains(x,y)){spark();this.chooseSeat([CAFE_RESTROOM_SEAT]);return}
     if(y>=548&&x>=126&&x<=234){interact(DOOR.x,DOOR.standY,'outside');return}
     if(this.jukebox&&Math.abs(x-JUKEBOX.x)<28&&y>=JUKEBOX.y-34&&y<=JUKEBOX.y+34){interact(JUKEBOX.standX,JUKEBOX.standY,'cafe-jukebox');return}
     if(BOARD.area.contains(x,y)){interact(BOARD.standX,BOARD.standY,'cafe-board');return}
@@ -449,7 +485,7 @@ class CafeScene extends Phaser.Scene{
     const self=this.self
     if(!self)return
     const free=seats.find(seat=>!this.seatTaken(seat))
-    if(free===undefined){this.say(seats.length>1?SEATS[seats[0]!]!.kind==='rail'?'Puno ang railing! Try a bench.':'Occupied na! Try another spot.':'Someone is sitting there!');return}
+    if(free===undefined){this.say(seats[0]===CAFE_RESTROOM_SEAT?'May tao pa sa CR! Hintay lang.':seats.length>1?SEATS[seats[0]!]!.kind==='rail'?'Puno ang railing! Try a bench.':'Occupied na! Try another spot.':'Someone is sitting there!');return}
     if(self.pose==='sit'&&self.seat===free)return
     const spot=SEATS[free]!
     this.walkTo(spot.x,spot.y,()=>this.sit(free))
@@ -457,21 +493,26 @@ class CafeScene extends Phaser.Scene{
   private sit(seat:number){
     const self=this.self,spot=SEATS[seat]
     if(!self||!spot)return
-    if(this.seatTaken(seat)){this.say('Someone is sitting there!');return}
+    if(this.seatTaken(seat)){this.say(seat===CAFE_RESTROOM_SEAT?'May tao pa sa CR! Hintay lang.':'Someone is sitting there!');return}
     self.sprite.setPosition(spot.x,spot.y)
     // Send the final floor position first so the server never reads a late move as standing up.
     this.flushMove()
     self.pose='sit';self.seat=seat;self.sitSince=this.time.now
     this.opts.onPose('sit',seat)
+    // In the CR for a few seconds, then back out on their own (moving first comes out sooner).
+    if(spot.kind==='restroom')this.time.delayedCall(RESTROOM_MS,()=>{if(self.pose==='sit'&&self.seat===seat)this.standUp()})
     // Settled at the railing or on a bench facing the view: a moment, then a little thought about it.
     if(spot.back)this.time.delayedCall(600,()=>{if(self.pose==='sit'&&self.seat===seat)this.thinkAboutView(true)})
   }
   standUp(notify=true){
     const self=this.self
     if(!self||self.pose!=='sit')return
+    const fromCr=self.seat===CAFE_RESTROOM_SEAT
     self.pose='stand';self.seat=undefined
-    if(notify)this.opts.onPose('stand')
+    if(notify){this.opts.onPose('stand');if(fromCr)this.cameOut(self)}
   }
+  // Out of the CR, with a little line for everyone to see.
+  private cameOut(visitor:Visitor){this.time.delayedCall(this.opts.reducedMotion?0:250,()=>this.bubbleOn(visitor,pick(CR_LINES),2400))}
   private flushMove(){
     const sprite=this.self?.sprite
     if(!sprite||Math.hypot(sprite.x-this.lastX,sprite.y-this.lastY)<=.5)return
@@ -562,7 +603,7 @@ class CafeScene extends Phaser.Scene{
     }
     for(const visitor of [this.self,...this.remotes.values()]){
       const cup=visitor?.cup
-      if(!cup?.visible||!visitor?.drink||!HOT_DRINKS.has(visitor.drink))continue
+      if(!cup?.visible||cup.alpha<.5||!visitor?.drink||!HOT_DRINKS.has(visitor.drink))continue
       const rise=(frame%6)*PX/2
       steam.fillStyle(0xffffff,.55-rise/16).fillRect(cup.x-PX+(frame%4<2?0:PX),cup.y-cup.displayHeight/2-PX*2-rise,PX,PX)
     }
@@ -638,8 +679,12 @@ class CafeScene extends Phaser.Scene{
     let texture=avatar,lift=0
     const seated=visitor.pose==='sit',seat=seated&&visitor.seat!==undefined?SEATS[visitor.seat]:undefined
     // Seen from behind at the railing and on the deck benches, so no blinking there.
-    const pose=seat?.kind==='rail'?'lean':seat?.kind==='bench'?'back-sit':seated?'sit':''
+    const pose=seat?.kind==='rail'?'lean':seat?.kind==='bench'?'back-sit':seated&&seat?.kind!=='restroom'?'sit':''
+    // Going into the CR: the visitor slips down through its door and out of sight, and back up on the way out.
+    const inside=seat?.kind==='restroom'?1:0
+    if(visitor.hidden!==inside)visitor.hidden=motion?Math.max(0,Math.min(1,visitor.hidden+(inside?1:-1)/14)):inside
     if(seat?.kind==='rail')texture=`${avatar}-lean`
+    else if(seat?.kind==='restroom')texture=avatar
     else if(seated){
       const seatLift=seat?.lift??24
       const progress=motion?Math.min(1,(now-visitor.sitSince)/SIT_MS):1
@@ -651,6 +696,7 @@ class CafeScene extends Phaser.Scene{
     else if(settled&&!seat?.back&&(now<visitor.sipUntil||now<visitor.relaxUntil))texture=`${avatar}${seated?'-sit':''}-blink`
     if(motion&&now<visitor.laughUntil&&Math.floor(now/110)%2)lift+=PX
     if(!this.textures.exists(texture))texture=avatar
+    if(visitor.hidden)lift-=Math.round(visitor.hidden*18/PX)*PX
     if(sprite.texture.key!==texture)sprite.setTexture(texture)
     sprite.setOrigin(.5,.5+lift/sprite.displayHeight)
     if(lift!==visitor.lift)visitor.lift=lift
@@ -662,6 +708,8 @@ class CafeScene extends Phaser.Scene{
     if(bubble instanceof Tag)bubble.setPosition(sprite.x,top-BUBBLE_GAP)
     else bubble?.setPosition(sprite.x,top-BUBBLE_GAP-20)
     const seat=visitor.pose==='sit'&&visitor.seat!==undefined?SEATS[visitor.seat]:undefined
+    const shown=1-visitor.hidden
+    for(const part of [sprite,label,cup])if(part&&part.alpha!==shown)part.setAlpha(shown)
     // On a deck bench the backrest is drawn over the visitor, so they sit a little lower in the drawing order.
     setDepthIfChanged(sprite,seat?.kind==='bench'?sprite.y:sprite.y+10);setDepthIfChanged(label,tagDepth(sprite.y))
     if(cup){
@@ -684,6 +732,13 @@ class CafeScene extends Phaser.Scene{
     this.bulbs.forEach((bulb,i)=>{const alpha=motion?Math.min(1,base-.05+Math.round((Math.sin(now/1300+i*1.7)*.5+.5)*3)/30):base;if(bulb.alpha!==alpha)bulb.setAlpha(alpha)})
     this.updateWindow()
     this.updateDeck()
+    // The CR's light is red while someone is inside; its door stands open while someone goes in or comes out.
+    if(this.crDoor){
+      const visitors=[this.self,...this.remotes.values()]
+      const busy=visitors.some(v=>v?.pose==='sit'&&v.seat===CAFE_RESTROOM_SEAT),open=visitors.some(v=>v&&v.hidden>0&&v.hidden<1)
+      const texture=`cr-${open?'open':'closed'}-${busy?'busy':'free'}`
+      if(this.crDoor.texture.key!==texture)this.crDoor.setTexture(texture)
+    }
     const box=this.jukebox
     if(box){
       const playing=this.music!==null
@@ -815,6 +870,8 @@ class CafeScene extends Phaser.Scene{
       if(own){this.self.sprite.setPosition(own.x,own.y);this.lastX=own.x;this.lastY=own.y;this.path=[];this.afterPath=undefined;this.standUp(false);this.holdDrink(this.self,isDrink(own.drink)?own.drink:null)}
     }
     this.selfId=selfId
+    // A visitor can change their name mid-visit (see /api/me/nickname); the next list carries it to every name tag.
+    for(const p of players){const visitor=p.id===selfId?this.self:this.remotes.get(p.id);if(visitor&&visitor.label.text!==p.nickname){visitor.label.setText(p.nickname);visitor.name=p.nickname;}}
     const incoming=new Set(players.filter(p=>p.id!==selfId).map(p=>p.id))
     for(const [id,p] of this.remotes)if(!incoming.has(id)){p.sprite.destroy();p.label.destroy();p.bubble?.destroy();p.cup?.destroy();p.umbrella?.destroy();this.remotes.delete(id)}
     let arrived:Visitor|undefined
@@ -827,7 +884,7 @@ class CafeScene extends Phaser.Scene{
         arrived=remote
       }
       // Someone already seated when this visitor arrives is drawn seated, without the hop.
-      if(p.pose==='sit'&&remote.pose!=='sit'){remote.sprite.setPosition(p.x,p.y);remote.pose='sit';remote.seat=p.seat;remote.sitSince=-Infinity}
+      if(p.pose==='sit'&&remote.pose!=='sit'){remote.sprite.setPosition(p.x,p.y);remote.pose='sit';remote.seat=p.seat;remote.sitSince=-Infinity;remote.hidden=p.seat===CAFE_RESTROOM_SEAT?1:0}
       else if(p.pose!=='sit')this.movePlayer(p.id,p.x,p.y)
       const drink=isDrink(p.drink)?p.drink:undefined
       if(remote.drink!==drink)this.holdDrink(remote,drink??null)
@@ -838,7 +895,7 @@ class CafeScene extends Phaser.Scene{
     this.hasPlayers=true
   }
   setPose(id:string,pose:Pose,seat?:number){
-    if(id===this.selfId){if(pose==='stand'&&this.self?.pose==='sit'){this.standUp(false);this.say('Someone is sitting there!')}return}
+    if(id===this.selfId){if(pose==='stand'&&this.self?.pose==='sit'){const cr=this.self.seat===CAFE_RESTROOM_SEAT;this.standUp(false);this.say(cr?'May tao pa sa CR! Hintay lang.':'Someone is sitting there!')}return}
     const remote=this.remotes.get(id)
     if(!remote)return
     if(pose==='sit'){
@@ -847,13 +904,13 @@ class CafeScene extends Phaser.Scene{
       const spot=seat===undefined?undefined:SEATS[seat]
       if(spot)remote.sprite.setPosition(spot.x,spot.y)
       remote.pose='sit';remote.seat=seat;remote.sitSince=this.time.now
-    }else{remote.pose='stand';remote.seat=undefined}
+    }else{if(remote.seat===CAFE_RESTROOM_SEAT)this.cameOut(remote);remote.pose='stand';remote.seat=undefined}
     this.placeTags(remote)
   }
   movePlayer(id:string,x:number,y:number){
     const remote=this.remotes.get(id)
     if(!remote)return
-    if(remote.pose==='sit'){remote.pose='stand';remote.seat=undefined}
+    if(remote.pose==='sit'){if(remote.seat===CAFE_RESTROOM_SEAT)this.cameOut(remote);remote.pose='stand';remote.seat=undefined}
     if(Math.hypot(x-remote.sprite.x,y-remote.sprite.y)<=.5)return
     remote.movingUntil=this.time.now+200
     this.tweens.killTweensOf(remote.sprite)

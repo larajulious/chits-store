@@ -5,7 +5,7 @@ import {mascotFloorPoint,residentCats,storeObstacles,type CatMood,type CatName,t
 import {scenes} from '../shared/world'
 import {createLocalMascot} from './localMascot'
 import * as art from './pixelArt'
-import {BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,NAME_TAG_GAP,PX,TAG_FONT,Tag,MIN_VIEW_W,characterPhase,createReactionTextures,currentDaylight,findPath,isHalloweenSeason,setDepthIfChanged,swingDoor,tagDepth,tapSparks,visitorFrame,type BoardOrder,type Daylight,type Player,type WorldGame} from './common'
+import {BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,NAME_TAG_GAP,PX,TAG_FONT,Tag,MIN_VIEW_W,characterPhase,createReactionTextures,currentDaylight,findPath,isHalloweenSeason,setDepthIfChanged,slideDoor,tagDepth,tapSparks,visitorFrame,type BoardOrder,type Daylight,type Player,type WorldGame} from './common'
 
 export type Avatar = AvatarId
 export type {BoardOrder,Player} from './common'
@@ -171,10 +171,10 @@ class StoreScene extends Phaser.Scene {
     this.createTextures()
     // Room shell: walls, awning, sign board, kitchen nook, chalkboard frame and tiled floor.
     this.add.image(0,0,'room').setOrigin(0).setScale(PX).setDepth(0)
-    // On screens wider than the room, the shop's wooden walls carry on either side, with a soft shadow at the room's edges.
+    // On screens wider than the room, a brick wall carries on either side, with a soft shadow at the room's edges.
     // Each side is 720 world units: enough for the widest view (MAX_VIEW_W).
-    for(const x of [-720,W])this.add.image(x,0,'store-backdrop').setOrigin(0).setScale(PX).setDepth(0)
-    this.add.graphics().setDepth(0).fillStyle(0x2b1d16,.35).fillRect(-PX*2,28,PX*2,520).fillRect(W,28,PX*2,520)
+    for(const x of [-720,W])this.add.image(x,0,'brick-wall').setOrigin(0).setScale(PX).setDepth(0)
+    this.add.graphics().setDepth(0).fillStyle(0x2b1d16,.35).fillRect(-PX*2,0,PX*2,H).fillRect(W,0,PX*2,H)
     this.daylight=this.opts.daylight??currentDaylight()
     this.windowSky=this.add.graphics().setDepth(.5)
     this.drawWindowSky()
@@ -324,7 +324,7 @@ class StoreScene extends Phaser.Scene {
     this.input.on('pointerupoutside',(pointer:Phaser.Input.Pointer)=>this.releaseYarn(pointer))
   }
   private createTextures(){
-    this.texture('room',art.roomArt());this.texture('store-backdrop',art.storeBackdropArt())
+    this.texture('room',art.roomArt());this.texture('brick-wall',art.brickWallArt())
     for(const option of avatarOptions)this.createVisitorTextures(option.id)
     if(this.opts.guideEnabled!==false)this.createVisitorTextures('menu-guide')
     this.texture('chef',art.chefArt());this.texture('chef-blink',art.chefArt(true))
@@ -858,7 +858,7 @@ class StoreScene extends Phaser.Scene {
     if(this.door)this.door.setTexture(this.door.texture.key.replace(/^store-door-\w+-/,`${this.doorPrefix}-`))
   }
   private closeDoor(){
-    if(this.door)swingDoor(this,this.door,this.doorPrefix,false,Boolean(this.opts.reducedMotion))
+    if(this.door)slideDoor(this,this.door,this.doorPrefix,false,Boolean(this.opts.reducedMotion))
     if(this.doorLight)this.tweens.add({targets:this.doorLight,alpha:0,duration:this.opts.reducedMotion?0:240})
   }
   exitScene(){
@@ -868,7 +868,7 @@ class StoreScene extends Phaser.Scene {
       this.exiting={x:self.sprite.x,y:self.sprite.y};this.resetMovement();this.doorTriggered=true
       this.tweens.killTweensOf(this.doorLight!);this.doorLight?.setAlpha(1)
       const instant=Boolean(this.opts.reducedMotion)
-      swingDoor(this,this.door,this.doorPrefix,true,instant,()=>{
+      slideDoor(this,this.door,this.doorPrefix,true,instant,()=>{
         if(instant){resolve();return}
         // Step out through the doorway while the screen fades.
         this.tweens.add({targets:self.sprite,y:self.sprite.y+24,alpha:0,duration:FADE_MS,onUpdate:()=>{self.label.setPosition(self.sprite.x,self.sprite.y-NAME_TAG_GAP).setAlpha(self.sprite.alpha)}})

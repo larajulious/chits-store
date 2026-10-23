@@ -157,22 +157,20 @@ export function bigPotArt(){
   return art.outline(INK).shadow(11,27.4,10,1)
 }
 
-// The Chits Store front door swings inward on its left hinge: frames 0..3 narrow the door to show the warm shop inside.
+// The Chits Store front doors: the same glass-panelled wooden sliding doors visitors see from inside.
+// Frames 0..3 slide the two leaves apart into the wall to show the warm shop inside.
 export function storeDoorArt(frame:0|1|2|3){
-  const art=new PixelArt(20,46),leaf=[20,13,7,3][frame]!
-  art.rect(0,0,20,30,'#f3e0bf').rect(0,30,20,16,'#efd5ae')
+  const art=new PixelArt(20,46),offset=[0,3,6,10][frame]!
+  art.rect(0,0,20,30,'#f3e0bf').rect(0,0,20,2,'#fff1cf').rect(0,30,20,16,'#efd5ae')
   for(let x=0;x<20;x+=5)art.rect(x,30,1,16,'#e2c49c')
-  art.rect(0,36,20,1,'#e2c49c').rect(0,0,20,2,'#fff1cf')
-  if(frame===0){
-    art.rect(0,0,20,46,WOOD).rect(0,0,1,46,WOOD_LIGHT).rect(19,0,1,46,WOOD_DARK)
-    art.box(3,4,14,18,'#ffe3a3',WOOD_DARK).rect(4,5,12,1,'#fff1cf').rect(10,5,1,16,WOOD_DARK).set(5,7,'#fff8dc').set(6,6,'#fff8dc')
-    art.box(3,26,14,16,WOOD,WOOD_DARK).rect(4,27,12,1,WOOD_LIGHT)
-    art.rect(15,24,2,2,'#e9b84f').set(15,24,'#fff1a8')
-  }else{
-    // Seen edge-on, the open door is a darker strip against the hinge side.
-    art.rect(0,0,leaf,46,WOOD_DARK).rect(0,0,1,46,WOOD).rect(leaf-1,0,1,46,WOOD_DEEP)
-    if(leaf>6)art.rect(2,4,leaf-4,18,'#d8b36f')
+  art.rect(0,36,20,1,'#e2c49c')
+  const leaf=(x:number,handle:number)=>{
+    art.rect(x,0,10,46,WOOD).rect(x,0,10,1,WOOD_LIGHT).rect(x,45,10,1,WOOD_DARK)
+    art.rect(x+2,3,6,32,'#ffe3a3').rect(x+2,3,6,1,'#fff1cf').rect(x+2,4,2,1,'#fff8dc').set(x+2,5,'#fff8dc')
+    art.rect(x+2,38,6,5,WOOD_DARK).rect(x+2,38,6,1,WOOD_LIGHT)
+    art.rect(x+handle,19,1,4,'#e9b84f')
   }
+  leaf(-offset,8);leaf(10+offset,1)
   return art
 }
 

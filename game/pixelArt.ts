@@ -564,46 +564,16 @@ export function roomArt(){
   return art
 }
 
-// The shop's wooden walls either side of the room, seen on screens wider than the room. Drawn once and used
-// on both sides: the awning stripes and the low front wall continue straight across from the room, and the
-// decorations sit near both edges (where the room is) so either side looks furnished.
-export function storeBackdropArt(){
-  const art=new PixelArt(360,290)
-  for(let x=0;x<360;x++)art.rect(x,14,1,254,Math.floor(x/12)%2?'#7b5236':'#83583a')
-  for(let x=0;x<360;x+=12){
-    art.rect(x,14,1,254,WOOD_DEEP).set(x+3,22,'#c9a06c').set(x+8,260,'#c9a06c')
-    const n=(x*37)%150;art.rect(x+4+(x%5),60+n,1,16,'#714a30').rect(x+8,120+(n%90),1,10,'#714a30')
+// A brick wall either side of the room, seen on screens wider than it: staggered bricks with a little
+// colour variation and a lit top edge, in brown mortar that matches the game's wooden frame.
+export function brickWallArt(){
+  const art=new PixelArt(360,290).rect(0,0,360,290,'#6e4a31')
+  const bricks=['#a0573f','#ab6248','#93503a','#b46a4e','#9a5a43']
+  for(let row=0;row*5<290;row++)for(let col=-1;col*12<360;col++){
+    const x=col*12+(row%2?6:0),y=row*5,hash=((row*73856093)^(col*19349663))>>>0
+    art.rect(x,y,11,4,bricks[hash%bricks.length]!).rect(x,y,11,1,hash%3?'#b8735a':'#c28066')
+    if(hash%7===0)art.set(x+3+hash%5,y+2,'#7f4430')
   }
-  art.rect(0,14,360,2,'#4b301f')
-  // Awning, exactly as along the top of the room.
-  art.rect(0,0,360,3,'#6b4630').rect(0,3,360,1,'#83573a')
-  for(let i=0;i<36;i++){
-    const x=i*10,color=i%2?'#8e5c3c':'#f6dfb4'
-    art.rect(x,4,10,7,color).rect(x+1,11,8,1,color).rect(x+2,12,6,1,color).rect(x,4,10,1,i%2?'#a26c48':'#fff0d2')
-    art.set(x,11,'#6b4630').set(x+1,12,'#6b4630').rect(x+2,13,6,1,'#6b4630').set(x+8,12,'#6b4630').set(x+9,11,'#6b4630')
-  }
-  // Warm string lights sagging between the nails.
-  const bulbs=['#ffd45e','#fff1cf','#f3a09c','#ffd45e','#a9ec8f']
-  for(let x=0;x<360;x++){
-    const span=x%60,y=Math.round(24+Math.sin(span/60*Math.PI)*8)
-    art.set(x,y,'#4b301f')
-    if(span%10===5)art.rect(x-1,y+1,3,3,bulbs[Math.floor(x/10)%bulbs.length]!).set(x,y+1,'#ffffff')
-  }
-  // Kakanin portraits in wooden frames, a shelf of jars and tall plants, near both edges.
-  for(const [x,id] of [[318,'palitaw'],[268,'cupcake'],[218,'puto'],[12,'bibingka'],[62,'sapin-sapin'],[112,'boba']] as const){
-    art.box(x,92,30,26,WOOD_LIGHT,INK).rect(x+2,94,26,22,'#f6e2bc').stamp(headArt(id),x+5,97)
-  }
-  for(const x of [252,40]){
-    art.rect(x,160,64,3,WOOD_LIGHT).rect(x,163,64,1,WOOD_DARK).rect(x+6,164,2,4,WOOD_DARK).rect(x+56,164,2,4,WOOD_DARK)
-    ;['#d98b4b','#7fae5e','#c9a14a','#d9785b','#a8c66c','#e8c690'].forEach((fill,i)=>{const jx=x+4+i*10;art.box(jx,150,7,10,'#f4e3c0','#8a6a4a').rect(jx,149,7,1,'#b5764a').rect(jx+1,153,5,6,fill)})
-  }
-  for(const x of [334,10]){
-    art.stroke(x+8,250,x+8,196,2,LEAF).stroke(x+8,246,x-2,212,1.8,LEAF_DARK).stroke(x+8,246,x+18,208,1.8,LEAF_DARK).stroke(x+8,240,x+2,200,1.4,LEAF_LIGHT).stroke(x+8,236,x+15,198,1.4,LEAF_LIGHT)
-    art.rect(x+1,246,14,20,'#c4744a').rect(x,244,16,3,'#d98a5c').rect(x+12,248,2,18,'#a85f3a')
-  }
-  // Skirting board, then the room's low front wall.
-  art.rect(0,266,360,8,WOOD_DEEP).rect(0,266,360,1,'#94643f')
-  art.rect(0,274,360,16,'#b29a80').rect(0,274,360,1,'#8e7760').rect(0,275,360,1,'#c7b197').rect(0,286,360,4,'#9a836b')
   return art
 }
 

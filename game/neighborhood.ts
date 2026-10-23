@@ -3,7 +3,7 @@ import {avatarOptions,type AvatarId} from '../shared/avatars'
 import {benchSeats,scenes,type Pose} from '../shared/world'
 import * as art from './pixelArt'
 import * as street from './neighborhoodArt'
-import {MAX_VIEW_W,MIN_VIEW_W,BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,NAME_TAG_GAP,PX,TAG_FONT,Tag,addTexture,characterPhase,createReactionTextures,currentDaylight,findPath,isHalloweenSeason,reactionTexture,setDepthIfChanged,swingDoor,tagDepth,tapSparks,visitorFrame,type BoardOrder,type Player,type WorldGame} from './common'
+import {MAX_VIEW_W,MIN_VIEW_W,BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,NAME_TAG_GAP,PX,TAG_FONT,Tag,addTexture,characterPhase,createReactionTextures,currentDaylight,findPath,isHalloweenSeason,reactionTexture,setDepthIfChanged,slideDoor,tagDepth,tapSparks,visitorFrame,type BoardOrder,type Player,type WorldGame} from './common'
 
 // Chits Neighborhood: the street outside the store. Loaded only when a visitor steps outside, as its own Phaser game.
 export type NeighborhoodGame = WorldGame & {setPose:(id:string,pose:Pose,seat?:number)=>void;setBoard:(orders:BoardOrder[])=>void;vend:()=>void;goInside:()=>void}
@@ -147,10 +147,10 @@ class NeighborhoodScene extends Phaser.Scene{
     this.self={sprite,label:this.tag(spawn.x,spawn.y-NAME_TAG_GAP,this.opts.nickname).setDepth(tagDepth(spawn.y)),avatar,phase:characterPhase(this.opts.nickname),movingUntil:0,pose:'stand',sitSince:0,lift:0}
     this.fitCamera(this.opts.viewWidth??MIN_VIEW_W)
     camera.centerOn(spawn.x,H/2).startFollow(sprite,true,this.opts.reducedMotion?1:.12,1)
-    // Stepping out of the store: fade in while the door swings shut behind the visitor.
+    // Stepping out of the store: fade in while the doors slide shut behind the visitor.
     if(this.opts.arriving){
       if(!this.opts.reducedMotion)camera.fadeIn(FADE_MS,...FADE_COLOR)
-      this.time.delayedCall(this.opts.reducedMotion?0:450,()=>{if(this.door)swingDoor(this,this.door,'shop-door',false,Boolean(this.opts.reducedMotion))})
+      this.time.delayedCall(this.opts.reducedMotion?0:450,()=>{if(this.door)slideDoor(this,this.door,'shop-door',false,Boolean(this.opts.reducedMotion))})
     }
     this.doorReadyAt=this.time.now+1200
     if(this.input.keyboard){
@@ -390,7 +390,7 @@ class NeighborhoodScene extends Phaser.Scene{
       this.standUp(false)
       this.exiting={x:self.sprite.x,y:self.sprite.y};this.resetMovement();this.doorTriggered=true
       const instant=Boolean(this.opts.reducedMotion)
-      swingDoor(this,this.door,'shop-door',true,instant,()=>{
+      slideDoor(this,this.door,'shop-door',true,instant,()=>{
         if(instant){resolve();return}
         // Step in through the door while the screen fades.
         this.tweens.add({targets:self.sprite,y:self.sprite.y-16,alpha:0,duration:FADE_MS,onUpdate:()=>{self.label.setPosition(self.sprite.x,self.sprite.y-NAME_TAG_GAP).setAlpha(self.sprite.alpha)}})
@@ -403,7 +403,7 @@ class NeighborhoodScene extends Phaser.Scene{
     this.exiting=undefined;this.doorPush=0;this.doorReadyAt=this.time.now+1200
     if(from&&self){this.tweens.killTweensOf(self.sprite);self.sprite.setPosition(from.x,from.y).setAlpha(1);self.label.setAlpha(1);this.placeTags(self)}
     if(this.opts.reducedMotion)this.cameras.main.resetFX();else this.cameras.main.fadeEffect.start(false,FADE_MS,...FADE_COLOR,true)
-    if(this.door)swingDoor(this,this.door,'shop-door',false,Boolean(this.opts.reducedMotion))
+    if(this.door)slideDoor(this,this.door,'shop-door',false,Boolean(this.opts.reducedMotion))
   }
   override update(_:number,delta:number){
     this.updateAmbient()

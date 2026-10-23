@@ -127,8 +127,8 @@ export function tapSparks(scene:Phaser.Scene,x:number,y:number){
   },onComplete:()=>spark.destroy()})
 }
 
-// Steps a door sprite through its frames (`${prefix}-0` closed .. `${prefix}-3` open), one every 90 ms.
-export function swingDoor(scene:Phaser.Scene,door:Phaser.GameObjects.Image,prefix:string,open:boolean,instant:boolean,done?:()=>void){
+// Slides a door sprite through its frames (`${prefix}-0` closed .. `${prefix}-3` open), one every 90 ms.
+export function slideDoor(scene:Phaser.Scene,door:Phaser.GameObjects.Image,prefix:string,open:boolean,instant:boolean,done?:()=>void){
   const frames=open?[1,2,3]:[2,1,0]
   if(instant){door.setTexture(`${prefix}-${open?3:0}`);done?.();return}
   frames.forEach((frame,i)=>scene.time.delayedCall(i*90,()=>{if(door.active)door.setTexture(`${prefix}-${frame}`);if(i===frames.length-1)done?.()}))

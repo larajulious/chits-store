@@ -38,7 +38,7 @@ A cozy multiplayer bakery prototype, built in one **Nuxt + Phaser + SQLite** pro
 - Both scenes follow the Manila clock (checked every minute): day (6–17), dusk (5–6 and 17–19) and night. Outside, the sky changes and the lamps and shop windows light up after dark; inside, the side windows and the view through the front doors match. Preview with `/store?time=day|dusk|night`.
 - A refresh keeps the visitor in the scene they were in (per browser tab); entering from the welcome page or leaving always starts the next visit inside.
 - The street is a separate lazily loaded chunk and Phaser game; only one scene exists at a time.
-- The game fills the full width of any screen. The view is always 580 world units tall and as wide as the screen's shape (360 on phones, up to 1800 on ultra-wide screens). Inside, the room stays centred between the shop's decorated wooden walls; outside, the whole street shows on wide screens, carrying on past both ends to neighbouring houses and fiesta barricades. Resizing or rotating reshapes the running scene without a reload.
+- The game fills the full width of any screen. The view is always 580 world units tall and as wide as the screen's shape (360 on phones, up to 1800 on ultra-wide screens). Inside, the room stays centred against a brick wall; outside, the whole street shows on wide screens, carrying on past both ends to neighbouring houses and fiesta barricades. Resizing or rotating reshapes the running scene without a reload.
 
 ## Setup on macOS
 

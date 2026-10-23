@@ -225,6 +225,47 @@ export function staffArt(blink=false){
   return art.stamp(headArt('staff',blink),0,0)
 }
 
+// ---------- Dancers on the dance floor ----------
+// Two kakanin performers in sequined costumes; visitors on the floor dance the same poses in their
+// green apron. Only three poses are drawn: the scene flips 'side' for the other direction.
+// The canvas is as tall as a visitor's and centred the same way, so swapping textures never shifts the feet.
+export type DancerPose='up'|'side'|'clap'
+type Outfit={suit:string;shade:string;trim:string;pants:string;apron?:boolean}
+export const DANCER_COSTUMES={cupcake:{suit:'#8b5cc4',shade:'#643a9c',trim:'#ffd45e',pants:'#3b3a42'},puto:{suit:'#ef6b57',shade:'#c8553d',trim:'#fff1cf',pants:'#3b3a42'}} as const satisfies Record<string,Outfit>
+export type DancerId=keyof typeof DANCER_COSTUMES
+const VISITOR_OUTFIT:Outfit={suit:'#5fa058',shade:'#4c8747',trim:'#f8f3e6',pants:'#4a7d45',apron:true}
+export function dancerArt(id:HeadId,pose:DancerPose,outfit:Outfit=id in DANCER_COSTUMES?DANCER_COSTUMES[id as DancerId]:VISITOR_OUTFIT){
+  const option=avatarOptions.find(a=>a.id===id),skin=option?hex(option.body):'#f3cf82',{suit,shade,trim,pants}=outfit
+  const shoe='#5a3b27',body=new PixelArt(24,26)
+  if(pose==='up')body.stroke(6.5,15.5,2.5,9.5,1,skin,false).stroke(17.5,15.5,21.5,9.5,1,skin,false)
+  else if(pose==='side')body.stroke(6.5,15.5,1.5,11.5,1,skin,false).stroke(17.5,15.5,19.5,17.5,.8,skin,false).stroke(19.5,17.5,17.5,19.5,.8,skin,false)
+  else body.stroke(6.5,15.5,10.5,17.5,1,skin,false).stroke(17.5,15.5,13.5,17.5,1,skin,false)
+  // Legs go under the costume; arms that cross the chest (the clap) are drawn back on top of it.
+  if(pose==='up')body.rect(7,21,3,2,pants).rect(14,21,3,2,pants).rect(6,23,4,1,shoe).rect(14,23,4,1,shoe)
+  else if(pose==='side')body.rect(7,21,3,1,pants).rect(6,22,4,1,shoe).rect(13,21,3,2,pants).rect(13,23,4,1,shoe)
+  else body.rect(8,21,3,2,pants).rect(13,21,3,2,pants).rect(7,23,4,1,shoe).rect(13,23,4,1,shoe)
+  body.rect(7,14,10,7,suit).rect(16,15,1,6,shade)
+  if(outfit.apron)body.rect(9,15,6,6,trim).set(9,14,trim).set(14,14,trim).rect(10,19,4,1,'#e6dccb')
+  else{
+    body.rect(7,20,10,1,trim).set(11,14,trim).set(12,14,trim)
+    for(const [x,y] of [[8,16],[15,16],[10,18],[13,18]] as const)body.set(x,y,trim)
+  }
+  if(pose==='clap')body.stroke(7.5,16,10.5,17.5,.8,skin,false).stroke(16.5,16,13.5,17.5,.8,skin,false)
+  body.outline(INK)
+  return body.stamp(headArt(id),2,0).shadow(12,25,8,1.2)
+}
+// A light-up dance floor: frames 0..4 move the colours one tile along the diagonal.
+const DANCE_LIGHTS=['#ffd45e','#f3a09c','#a9ec8f','#bd95ea','#7cc4e8']
+export function danceFloorArt(frame:0|1|2|3|4){
+  const cols=6,rows=4,art=new PixelArt(cols*9+3,rows*7+5)
+  art.rect(1,1,cols*9+1,rows*7+2,'#4b3a5a').rect(1,rows*7+2,cols*9+1,1,'#2e2433')
+  for(let row=0;row<rows;row++)for(let col=0;col<cols;col++){
+    const x=2+col*9,y=2+row*7,light=DANCE_LIGHTS[(col+row+frame)%DANCE_LIGHTS.length]!
+    art.rect(x,y,8,6,light).set(x,y,'#ffffff').set(x+1,y,'#ffffff').set(x,y+1,'#ffffff')
+  }
+  return art.outline(INK)
+}
+
 // ---------- Handyman fixing a floor tile ----------
 // Kneeling in hard hat and safety vest; the right arm swings a hammer between frames.
 export function fixerArt(frame:'up'|'down'|'rest'){

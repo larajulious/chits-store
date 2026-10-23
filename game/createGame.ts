@@ -2,7 +2,7 @@ import Phaser from 'phaser'
 import { avatarOptions, type AvatarId } from '../shared/avatars'
 import { reactionOptions } from '../shared/reactions'
 import type {OrderStatus} from '../shared/order-status'
-import {mascotFloorPoint,residentCats,storeObstacles,type CatName,type CatSnapshot,type CatTaps} from '../shared/store-mascot'
+import {mascotFloorPoint,residentCats,storeObstacles,type CatMood,type CatName,type CatSnapshot,type CatTaps} from '../shared/store-mascot'
 import {createLocalMascot} from './localMascot'
 import * as art from './pixelArt'
 
@@ -13,8 +13,9 @@ export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>vo
 // playing: the shared jukebox has a song on. audible: this visitor is listening to it.
 export type JukeboxScene={playing:boolean;audible:boolean}
 type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onCatMeow:(name:CatName)=>void;onCatTap?:(name:CatName)=>void;catEnabled?:boolean;guideEnabled?:boolean;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number}
-type Character = {sprite:Phaser.GameObjects.Image;avatar:string;phase:number}
-type ShopCat = {name:CatName;roams:boolean;sprite:Phaser.GameObjects.Image;label:Tag;skin:string;counter?:Tag;counterUntil:number}
+// joinedDance: set once the character starts dancing on the floor, cleared when they step off it.
+type Character = {sprite:Phaser.GameObjects.Image;avatar:string;phase:number;joinedDance?:boolean}
+type ShopCat = {name:CatName;roams:boolean;sprite:Phaser.GameObjects.Image;label:Tag;skin:string;counter?:Tag;counterUntil:number;joinedDance?:boolean}
 // The store-wide tap tally per cat comes from the server; the bubble names it in each cat's voice.
 const CAT_TAP_WORDS:Record<CatName,string>={Miming:'meow',Onay:'purr'}
 // Texture prefix per cat; Miming keeps the original cat-* names.
@@ -37,7 +38,7 @@ const feedbackArea=obstructions[0]!
 const JUKEBOX={x:328,y:227,standX:320,standY:300,depth:256}
 // What the walking menu guide says now and then. Item lines use real names from today's menu;
 // before the menu is posted the guide only says it's on the way.
-const GUIDE_LINES=["Have you checked today's menu?",'Meryenda time! Tap me for the menu.',"Hungry? Today's menu is ready!",'Psst... tap me to see the menu!','Gutom ka na? Check the menu!','Something sweet is on the menu today!','Fresh meryenda today. Come see!']
+const GUIDE_LINES=["Have you checked today's menu?",'Meryenda time! Tap me for the menu.',"Hungry? Today's menu is ready!",'Psst... tap me to see the menu!','Gutom ka na? Check the menu!','Something sweet is on the menu today!','Fresh meryenda today. Come see!','Psst... hop on the dance floor!']
 const GUIDE_ITEM_LINES=['Try the {item} today!',"{item} is on today's menu!",'Have you tried our {item}?','Craving {item}? Tap me!','Fresh {item}, just for you!']
 const HALLOWEEN_GUIDE_LINES=['Happy Halloween! Treat yourself to meryenda.','Trick or treat? Tap me for the menu!','Psst... try tapping the pumpkins!']
 const HALLOWEEN_LINES={carved:['Boo!','Hehehe!','Boo! Did I scare you?'],plain:['Trick or treat!','Here, have a treat!'],bat:['Squeak!','Eek!']}
@@ -58,7 +59,35 @@ function isHalloweenSeason(now=new Date()){
   const [month,day]=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',month:'numeric',day:'numeric'}).format(now).split('/').map(Number)
   return month===10||(month===11&&day!<=2)
 }
-const menuGuideStops=[{x:120,y:440},{x:160,y:300},{x:200,y:280},{x:280,y:420},{x:220,y:530},{x:200,y:400},{x:230,y:540}]
+// Two performers dance on a light-up floor in the open corner left of the entrance. Each step of
+// the routine is [pose, flipped]; the second dancer is flipped throughout, so the pair mirror each other.
+// Any visitor standing still on the floor joins in on the same beat. That needs nothing from the server:
+// every client already knows where everyone stands, so everyone sees the same visitors dancing.
+const DANCE_FLOOR={x:80,y:494}
+const danceFloorArea=new Phaser.Geom.Rectangle(23,461,114,66)
+// Whether feet at (x, feetY) stand on the floor. A visitor's feet are 20 below their position, a cat's 10.
+const onDanceFloor=(x:number,feetY:number)=>x>=28&&x<=132&&feetY>=466&&feetY<=526
+// A cat dances only while it would otherwise be keeping still; never while walking, petted or after the yarn.
+const CAT_DANCE_MOODS=new Set<CatMood>(['idle','sitting','resting','sleeping','stretching'])
+// Grid points (the path finder's 20-unit cells) a tap on the floor walks to, between and in front of the performers.
+const DANCE_SPOTS=[{x:80,y:480},{x:60,y:500},{x:100,y:500},{x:40,y:500},{x:120,y:500}]
+const DANCERS=[{id:'cupcake',x:44,y:470,mirror:false},{id:'puto',x:116,y:470,mirror:true}] as const
+const DANCE_STEPS=[['up',false],['side',false],['clap',false],['side',true]] as const
+const DANCE_POSES=['up','side','clap'] as const
+const TWIRL_MS=700
+const CHEER_LINES=['Woohoo!','Meryenda party!','Dance with us!',"Let's gooo!",'Galing!','Sayaw tayo!','Clap along!','Snack break dance!','Hop on the floor and dance!']
+const CHEER_MUSIC_LINES=['I love this song!','Turn it up!','Feel the beat!']
+const CHEER_HALLOWEEN_LINES=['Happy Halloween!','Spooky moves!']
+const CHEER_CROWD_LINES=['Nice moves!','Follow our steps!','Everybody clap!','Keep it up!']
+const CHEER_TAP_LINES=['Wheee!','Thank you!','You dance too!','Yay, a fan!']
+const CHEER_JOIN_LINES=['Welcome to the floor, {name}!','Go {name}!','{name} has the moves!','Dance with us, {name}!']
+const CHEER_CAT_JOIN_LINES=['{name} joined the party!','Go {name}, go!','Meow-velous moves, {name}!','Look, {name} can dance!']
+function cheerLine(previous:string,music:boolean,crowd:boolean){
+  const lines=[...CHEER_LINES,...(music?CHEER_MUSIC_LINES:[]),...(isHalloweenSeason()?CHEER_HALLOWEEN_LINES:[]),...(crowd?CHEER_CROWD_LINES:[])]
+  for(let i=0;i<5;i++){const line=lines[Math.floor(Math.random()*lines.length)]!;if(line!==previous)return line}
+  return lines[0]!
+}
+const menuGuideStops=[{x:170,y:440},{x:160,y:300},{x:200,y:280},{x:280,y:420},{x:220,y:530},{x:200,y:400},{x:230,y:540}]
 function bounded(x:number,y:number){return Math.max(20,Math.min(340,x))>=20&&x>=20&&x<=340&&y>=260&&y<=542&&!obstructions.some(r=>r.contains(x,y))}
 function closestPoint(x:number,y:number){const a=Math.max(20,Math.min(340,x)),b=Math.max(260,Math.min(542,y));if(bounded(a,b))return {x:a,y:b};return {x:180,y:500}}
 function key(x:number,y:number){return `${x}|${y}`}
@@ -172,6 +201,13 @@ class StoreScene extends Phaser.Scene {
   private bats:{sprite:Phaser.GameObjects.Image;x:number;y:number;inward:1|-1;flyingSince:number}[]=[]
   private decorBubble?:Tag
   private decorBubbleTimer?:Phaser.Time.TimerEvent
+  private danceFloor?:Phaser.GameObjects.Image
+  private dancers:{sprite:Phaser.GameObjects.Image;id:art.DancerId;y:number;mirror:boolean;twirlUntil:number}[]=[]
+  private cheerBubble?:Tag
+  private cheerBubbleTimer?:Phaser.Time.TimerEvent
+  private nextCheerAt=0
+  private cheerTurn=0
+  private lastCheer=''
   private draggingYarn?:{pointerId:number;lastX:number;lastY:number;lastAt:number;previousX:number;previousY:number;previousAt:number}
   constructor(opts:Options){super('Store');this.opts=opts;this.zoom=opts.zoom??1;if(opts.catEnabled!==false)this.mascot=createLocalMascot()}
   private texture(name:string,pixels:art.PixelArt){if(!this.textures.exists(name))this.textures.addCanvas(name,pixels.toCanvas())}
@@ -227,6 +263,10 @@ class StoreScene extends Phaser.Scene {
     floor(54,410,'toolbox');floor(140,388,'cone')
     this.fixer=floor(84,392,'fixer-rest')
     this.fixerDust=this.add.graphics().setDepth(this.fixer.depth+1)
+    // The dance floor lies flat on the tiles; visitors and cats can walk across it.
+    this.danceFloor=this.sprite(DANCE_FLOOR.x,DANCE_FLOOR.y,'dance-floor-0',1)
+    this.dancers=DANCERS.map(({id,x,y,mirror})=>({sprite:this.sprite(x,y,`dancer-${id}-up`,y+10).setFlipX(mirror),id,y,mirror,twirlUntil:0}))
+    this.nextCheerAt=this.time.now+3000+Math.random()*3000
     this.sprite(180,564,'entrance',1000)
     this.text(180,559,'ENTRANCE',8,'#5e3d27',1001)
     // A few Halloween touches: pumpkins either side of the door and two bats by the sign.
@@ -286,11 +326,15 @@ class StoreScene extends Phaser.Scene {
       if(tappedCat){this.tapFeedback(x,y);this.countCatTap(tappedCat);const result=this.petCat(tappedCat.name);if(result!=='petted')this.meow(tappedCat.name);return}
       // Tapping the handyman makes him stop work and apologise for the renovation.
       if(this.fixer&&Math.abs(x-this.fixer.x)<26&&Math.abs(y-this.fixer.y)<26){this.tapFeedback(x,y);this.fixerSpeak();return}
+      // Tapping a dancer makes them twirl and cheer for the tapper.
+      const tappedDancer=this.dancers.find(dancer=>Math.abs(x-dancer.sprite.x)<18&&Math.abs(y-dancer.y)<26)
+      if(tappedDancer){this.tapFeedback(x,y);this.tapDancer(tappedDancer);return}
       // Halloween decorations react on the spot, before the counter and board areas behind them.
       const tappedPumpkin=this.pumpkins.find(({sprite})=>Math.abs(x-sprite.x)<18&&Math.abs(y-sprite.y)<16)
       if(tappedPumpkin){this.tapFeedback(x,y);this.tapPumpkin(tappedPumpkin);return}
       const tappedBat=this.bats.find(({sprite})=>Math.abs(x-sprite.x)<20&&Math.abs(y-sprite.y)<14)
       if(tappedBat){this.tapFeedback(x,y);this.tapBat(tappedBat);return}
+      if(danceFloorArea.contains(x,y)){const spot=this.freeDanceSpot(x,y);this.tapFeedback(x,y);this.walkTo(spot.x,spot.y);return}
       const interact=(tx:number,ty:number,kind:string)=>{this.tapFeedback(x,y);this.walkTo(tx,ty,()=>this.opts.onInteract(kind))}
       if(this.jukebox&&Math.abs(x-this.jukebox.x)<28&&y>=this.jukebox.y-34&&y<=this.jukebox.y+36){interact(JUKEBOX.standX,JUKEBOX.standY,'jukebox');return}
       if(x>=192&&y<200){interact(220,260,'board');return}
@@ -319,6 +363,8 @@ class StoreScene extends Phaser.Scene {
     this.texture('feedback-board',art.feedbackBoardArt());this.texture('entrance',art.entranceArt())
     this.texture('jukebox-idle',art.jukeboxArt('idle'));for(const frame of [0,1,2,3] as const)this.texture(`jukebox-${frame}`,art.jukeboxArt(frame))
     this.texture('music-note',art.musicNoteArt())
+    for(const {id} of DANCERS)for(const pose of DANCE_POSES)this.texture(`dancer-${id}-${pose}`,art.dancerArt(id,pose))
+    for(const frame of [0,1,2,3,4] as const)this.texture(`dance-floor-${frame}`,art.danceFloorArt(frame))
     if(isHalloweenSeason()){
       this.texture('pumpkin',art.pumpkinArt());this.texture('pumpkin-glow',art.pumpkinArt('glow'));this.texture('pumpkin-flicker',art.pumpkinArt('flicker'));this.texture('pumpkin-bright',art.pumpkinArt('bright'))
       this.texture('bat-up',art.batArt('up'));this.texture('bat-down',art.batArt('down'))
@@ -338,6 +384,7 @@ class StoreScene extends Phaser.Scene {
   private createVisitorTextures(id:Parameters<typeof art.visitorArt>[0]){
     this.texture(id,art.visitorArt(id,'idle'));this.texture(`${id}-blink`,art.visitorArt(id,'blink'))
     this.texture(`${id}-step1`,art.visitorArt(id,'step1'));this.texture(`${id}-step2`,art.visitorArt(id,'step2'))
+    for(const pose of DANCE_POSES)this.texture(`${id}-dance-${pose}`,art.dancerArt(id,pose))
   }
   // Four small pixel sparks: confirms a tap without moving the camera or adding lasting effects.
   private tapFeedback(x:number,y:number){
@@ -396,24 +443,33 @@ class StoreScene extends Phaser.Scene {
     const rolling=motion&&snapshot.yarn.moving&&Math.floor(this.time.now/90)%2?'yarn-ball-roll':'yarn-ball'
     if(ball.texture.key!==rolling)ball.setTexture(rolling)
   }
-  private drawCat({name,roams,sprite:cat,label,skin}:ShopCat,state:CatSnapshot,motion:boolean){
+  private drawCat(shopCat:ShopCat,state:CatSnapshot,motion:boolean){
+    const {name,roams,sprite:cat,label,skin}=shopCat
     const mood=state.mood,now=this.time.now
     const walking=mood==='walking'||mood==='approaching_yarn'||mood==='returning_to_idle'
     const running=mood==='visiting'
+    // A cat keeping still on the dance floor dances on the performers' beat: sitting tail-up on
+    // the hops, standing with a paw raised on the side steps. The performers cheer when it starts.
+    const onFloor=onDanceFloor(state.x,state.y+10),dancing=onFloor&&!state.purring&&CAT_DANCE_MOODS.has(mood)
+    if(!onFloor)shopCat.joinedDance=false
+    else if(dancing&&!shopCat.joinedDance){shopCat.joinedDance=true;this.welcomeDancer(name,state.x,CHEER_CAT_JOIN_LINES)}
+    const [step,stepFlipped]=this.danceStep()
     // When snuggling, Miming sits and flicks its tail slowly while Onay stands beside it.
-    const pose=walking||running?(motion&&Math.floor(now/180)%2?'walk':'idle'):mood==='idle'?'idle':
+    const pose=dancing?(step==='side'?'play':'notice'):walking||running?(motion&&Math.floor(now/180)%2?'walk':'idle'):mood==='idle'?'idle':
       mood==='sleeping'?'sleep':mood==='resting'?'rest':mood==='stretching'?'stretch':mood==='noticing_yarn'?'notice':
       mood==='playing_with_yarn'?(motion&&Math.floor(now/160)%2?'play':'idle'):
       mood==='snuggling'?(!roams?'idle':motion&&Math.floor(now/700)%2?'notice':'sit'):'sit'
     const texture=`${skin}-${pose}`
     if(cat.texture.key!==texture)cat.setTexture(texture)
     // Standing art faces left, so flip when the cat heads right.
-    cat.setFlipX(state.facing>0&&(walking||running||mood==='playing_with_yarn'||mood==='noticing_yarn'||mood==='snuggling'))
-    const purr=state.purring&&motion&&Math.floor(now/220)%2?PX/2:0
-    cat.setPosition(state.x,state.y+10-purr)
-    setDepthIfChanged(cat,cat.y+2);label.setPosition(cat.x,cat.y-cat.displayHeight-1);setDepthIfChanged(label,tagDepth(cat.y))
+    cat.setFlipX(dancing?step==='side'&&stepFlipped:state.facing>0&&(walking||running||mood==='playing_with_yarn'||mood==='noticing_yarn'||mood==='snuggling'))
+    const purr=state.purring&&motion&&Math.floor(now/220)%2?PX/2:0,hop=dancing&&motion&&step!=='side'?PX:0
+    cat.setPosition(state.x,state.y+10-purr-hop)
+    // While dancing the tag stays at the sitting height so it doesn't bounce between poses.
+    const top=dancing?state.y+10-this.textures.getFrame(`${skin}-notice`).height*PX:cat.y-cat.displayHeight
+    setDepthIfChanged(cat,state.y+12);label.setPosition(cat.x,top-1);setDepthIfChanged(label,tagDepth(cat.y))
     const tag=name.toUpperCase()
-    const caption=state.purring?`${tag} ♥`:mood==='sleeping'?`${tag} zZ`:mood==='noticing_yarn'?`${tag} !`:tag
+    const caption=state.purring?`${tag} ♥`:dancing?`${tag} ♪`:mood==='sleeping'?`${tag} zZ`:mood==='noticing_yarn'?`${tag} !`:tag
     if(label.text!==caption)label.setText(caption)
   }
   // Two cats side by side would stack their name tags; slide the tags apart instead.
@@ -510,14 +566,26 @@ class StoreScene extends Phaser.Scene {
   // Frame swaps and whole-pixel lifts only: pixel art is never rotated or squashed.
   private animateCharacter(character:Character,moving:boolean){
     const {sprite,avatar,phase}=character
-    let texture=avatar,lift=0
-    if(!this.opts.reducedMotion){
+    // Standing still on the dance floor joins the performers' routine; walking across it doesn't.
+    const onFloor=onDanceFloor(sprite.x,sprite.y+20),dancing=onFloor&&!moving&&this.textures.exists(`${avatar}-dance-up`)
+    let texture=avatar,lift=0,flip=false
+    if(!onFloor)character.joinedDance=false
+    else if(dancing&&!character.joinedDance){
+      character.joinedDance=true
+      // Visitors are greeted by name; the walking guide isn't greeted.
+      if(character!==this.menuGuide&&'label' in character)this.welcomeDancer((character as VisitorCharacter).label.text,sprite.x,CHEER_JOIN_LINES)
+    }
+    if(dancing){
+      const [pose,flipped]=this.danceStep()
+      texture=`${avatar}-dance-${pose}`;flip=flipped;lift=!this.opts.reducedMotion&&pose!=='side'?PX:0
+    }else if(!this.opts.reducedMotion){
       const time=this.time.now+phase
       if(moving){const step=Math.floor(time/130)%4;lift=step%2?PX:0;if(step===1)texture=`${avatar}-step1`;if(step===3)texture=`${avatar}-step2`}
       else{lift=Math.floor(time/900)%2?PX/2:0;if(time%(3800+phase%1800)<130)texture=`${avatar}-blink`}
       if(!this.textures.exists(texture))texture=avatar
     }
     if(sprite.texture.key!==texture)sprite.setTexture(texture)
+    if(sprite.flipX!==flip)sprite.setFlipX(flip)
     // Animate only the artwork: x/y remain the collision and network coordinates.
     sprite.setOrigin(.5,.5+lift/sprite.displayHeight)
   }
@@ -687,11 +755,69 @@ class StoreScene extends Phaser.Scene {
     this.decorBubbleTimer=this.time.delayedCall(1800,()=>{if(this.decorBubble===bubble)this.decorBubble=undefined;bubble.destroy();this.decorBubbleTimer=undefined})
     return bubble
   }
+  // One pose per beat with a one-pixel hop on 'up' and 'clap'; the beat quickens while the jukebox plays.
+  // A twirl is fast facing flips with a higher hop. Under reduced motion both hold still and the floor stays lit.
+  // Performers and visitors share this beat, so everyone on the floor moves together.
+  private danceBeat(){return this.jukeboxState.playing?240:340}
+  private danceStep(){return DANCE_STEPS[this.opts.reducedMotion?0:Math.floor(this.time.now/this.danceBeat())%DANCE_STEPS.length]!}
+  private updateDancers(){
+    if(!this.dancers.length)return
+    const now=this.time.now,motion=!this.opts.reducedMotion,[pose,flipped]=this.danceStep()
+    const floor=`dance-floor-${motion?Math.floor(now/(this.danceBeat()*2))%5:0}`
+    if(this.danceFloor&&this.danceFloor.texture.key!==floor)this.danceFloor.setTexture(floor)
+    for(const dancer of this.dancers){
+      const twirl=motion?(dancer.twirlUntil-now)/TWIRL_MS:0
+      let texture=`dancer-${dancer.id}-${pose}`,flip=flipped!==dancer.mirror,lift=motion&&pose!=='side'?PX:0
+      if(twirl>0){texture=`dancer-${dancer.id}-up`;flip=Math.floor(now/90)%2===0;lift=Math.round(Math.sin(twirl*Math.PI)*5)*PX}
+      if(dancer.sprite.texture.key!==texture)dancer.sprite.setTexture(texture)
+      if(dancer.sprite.flipX!==flip)dancer.sprite.setFlipX(flip)
+      if(dancer.sprite.y!==dancer.y-lift)dancer.sprite.setY(dancer.y-lift)
+    }
+    // A new cheer waits while a dialog is open, like the guide's lines.
+    if(!this.cheerBubble&&now>=this.nextCheerAt&&this.opts.controlsEnabled!==false){
+      const crowd=Boolean(this.self?.joinedDance)||[...this.remotes.values(),...this.cats].some(other=>other.joinedDance)
+      this.dancerCheer(this.dancers[this.cheerTurn++%this.dancers.length]!,cheerLine(this.lastCheer,this.jukeboxState.playing,crowd))
+    }
+  }
+  // The performer nearer to x greets a visitor or cat who has just started dancing.
+  private welcomeDancer(name:string,x:number,lines:string[]){
+    if(!this.dancers.length)return
+    const short=name.length>12?`${name.slice(0,11).trimEnd()}…`:name
+    const dancer=this.dancers.reduce((best,dancer)=>Math.abs(dancer.sprite.x-x)<Math.abs(best.sprite.x-x)?dancer:best)
+    this.dancerCheer(dancer,lines[Math.floor(Math.random()*lines.length)]!.replace('{name}',short))
+  }
+  // The spot nearest the tap that no other visitor is standing on; the nearest spot if all are taken.
+  private freeDanceSpot(x:number,y:number){
+    const spots=[...DANCE_SPOTS].sort((a,b)=>Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y))
+    const taken=(spot:{x:number;y:number})=>[...this.remotes.values()].some(({sprite})=>Math.hypot(sprite.x-spot.x,sprite.y-spot.y)<12)
+    return spots.find(spot=>!taken(spot))??spots[0]!
+  }
+  private tapDancer(dancer:typeof this.dancers[number]){
+    if(this.time.now>=dancer.twirlUntil)dancer.twirlUntil=this.time.now+TWIRL_MS
+    this.dancerCheer(dancer,CHEER_TAP_LINES[Math.floor(Math.random()*CHEER_TAP_LINES.length)]!)
+  }
+  // The bubble stays put above the name tags of visitors dancing in front (not hopping with the dancer)
+  // and inside the room's left wall.
+  private dancerCheer(dancer:typeof this.dancers[number],line:string){
+    this.cheerBubbleTimer?.remove(false)
+    this.cheerBubble?.destroy()
+    this.lastCheer=line
+    const bubble=this.tag(dancer.sprite.x,dancer.y-46,line,TAG_FONT,120).setDepth(900),half=bubble.getBounds().width/2
+    bubble.setX(Math.round(Math.max(half+4,dancer.sprite.x)/PX)*PX)
+    this.cheerBubble=bubble
+    this.cheerBubbleTimer=this.time.delayedCall(2800,()=>{
+      bubble.destroy()
+      if(this.cheerBubble!==bubble)return
+      this.cheerBubble=undefined;this.cheerBubbleTimer=undefined
+      this.nextCheerAt=this.time.now+7000+Math.random()*6000
+    })
+  }
   override update(_:number,delta:number){
     this.updateMascot(delta)
     this.updateFixer()
     this.updateJukebox()
     this.updateHalloween()
+    this.updateDancers()
     for(const character of this.staff)this.animateCharacter(character,false)
     this.updateChefCooking()
     for(const character of this.remotes.values())this.animateCharacter(character,this.time.now<character.movingUntil)

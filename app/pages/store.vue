@@ -11,6 +11,9 @@ import type {CatName,CatTaps} from '../../shared/store-mascot'
 import {canSetVolume,createJukeboxPlayer,readJukeboxPrefs,saveJukeboxPrefs,type JukeboxListenStatus,type JukeboxPlayer} from '../utils/jukeboxPlayer'
 import {isScene,scenes,type Pose,type SceneId} from '../../shared/world'
 import {clearVisitScene,readVisitScene,saveVisitScene} from '../utils/visitScene'
+import {isCafeAction,isCafeMood,isDrink,type CafeAction,type CafeJukeboxState,type CafeJukeboxVote,type CafeMood,type DrinkId} from '../../shared/cafe'
+import {createCafeMusic,readCafeVolume,type CafeMusic,type CafeMusicStatus} from '../utils/cafeMusic'
+import {SKY_PREVIEW} from '../../game/scenery'
 const route=useRoute()
 const featureConfig=useRuntimeConfig().public
 // Runtime flags can disable a feature for everyone; query switches isolate one browser for profiling.
@@ -28,7 +31,8 @@ const myOrders=ref<CustomerOrderSummary[]>([]),selectedOrderId=ref<number|null>(
 const cartLines=computed(()=>menu.value.items.filter(item=>(cart.value[item.id]??0)>0).map(item=>({...item,quantity:cart.value[item.id]!,lineTotalCentavos:item.priceCentavos*cart.value[item.id]!})))
 const cartTotal=computed(()=>cartLines.value.reduce((sum,item)=>sum+item.lineTotalCentavos,0))
 const privateUnread=computed(()=>myOrders.value.reduce((sum,order)=>sum+order.unread,0))
-const allUnread=computed(()=>unreadChat.value+privateUnread.value)
+// While the store is closed the order inbox is hidden, so its replies don't count toward the Chat badge.
+const allUnread=computed(()=>unreadChat.value+(storeOpen.value?privateUnread.value:0))
 const featuredOrder=computed(()=>myOrders.value.find(order=>order.unread>0)||myOrders.value[0])
 let inboxInitialized=false,inboxPolling=false
 let menuStale=true,menuEpoch=0,wantedMenuVersion:string|null=null,hasWelcomed=false,hiddenAt=0
@@ -50,19 +54,40 @@ const online=computed(()=>onlineTotal.value??players.value.length)
 let transitionPlayers:Player[]=[]
 const scenePlayers=computed(()=>serverScene.value===scene.value?players.value:transitionPlayers)
 let sceneWait:((ok:boolean)=>void)|undefined,sceneReadyTimer:ReturnType<typeof setTimeout>|undefined
-// /store?time=night previews the street's lighting; otherwise it follows the Manila clock.
-const daylight=computed(()=>['day','dusk','night'].includes(String(route.query.time))?route.query.time as 'day'|'dusk'|'night':undefined)
+// /store?time=night previews the lighting (and morning, afternoon or sunset the café deck's sky); otherwise it follows the Manila clock.
+const previewTime=computed(()=>String(route.query.time))
+const daylight=computed(()=>({day:'day',morning:'day',afternoon:'day',dusk:'dusk',sunset:'dusk',night:'night'} as const)[previewTime.value as 'day']??undefined)
+const skyMinute=computed(()=>SKY_PREVIEW[previewTime.value])
 const overlay=ref(''), message=ref(''), chat=ref<ChatMessage[]>([]), unreadChat=ref(0), notice=ref(''), connected=ref(false), returningHome=ref(false), chatEnabled=ref(true)
 const jukebox=ref<JukeboxState|null>(null),jukeboxVote=ref<JukeboxMyVote>(null),jukeboxPendingVote=ref(''),jukeboxMessage=ref(''),jukeboxClock=ref(Date.now())
 // Store-wide tap totals for Miming and Onay, sent by the server on connect and after taps.
 const catTaps=ref<CatTaps|null>(null)
 const musicStatus=ref<JukeboxListenStatus>('off'),musicOn=ref(false),musicVolume=ref(.35),musicVolumeAdjustable=ref(true)
 // The header indicator reads ON only while this visitor actually hears the shared music.
-const musicListening=computed(()=>musicOn.value&&!['off','needs_gesture'].includes(musicStatus.value))
+const musicListening=computed(()=>musicOn.value&&(scene.value==='cafe'?cafeStatus.value==='playing':!['off','needs_gesture'].includes(musicStatus.value)))
 const jukeboxScene=computed(()=>({playing:Boolean(jukebox.value?.enabled&&jukebox.value.nowPlaying),audible:musicStatus.value==='playing'}))
 let musicPlayer:JukeboxPlayer|undefined,pingSentAt=0
 let jukeboxClockTimer:ReturnType<typeof setInterval>|undefined,jukeboxVoteTimeout:ReturnType<typeof setTimeout>|undefined
-const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean|undefined;exitScene:()=>Promise<void>;cancelExit:()=>void;setPose:(id:string,pose:Pose,seat?:number)=>void;vend:()=>void;goInside:()=>void}|null>(null)
+const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean|undefined;exitScene:(target?:SceneId)=>Promise<void>;cancelExit:()=>void;setPose:(id:string,pose:Pose,seat?:number)=>void;vend:()=>void;goInside:()=>void;goToCafe:()=>void;
+  setDrink:(id:string,drink:DrinkId|null)=>void;playAction:(id:string,action:CafeAction)=>void;orderDrink:(drink:DrinkId,surprise?:boolean)=>void;cafeAct:(action:CafeAction)=>void;standUp:()=>void;enjoyView:()=>void}|null>(null)
+// Kape & Chits: this visitor's seat and cup (for the action bar), and their own café music, which nobody else hears.
+const selfSeated=ref(false),selfDrink=ref<DrinkId|null>(null)
+// How many are in Kape & Chits, for the sign outside; the server sends the count to the street only.
+const cafeInside=ref(0)
+// The café's shared music timeline (the mood also sets the café's weather: rain for the rainy mood), this visitor's
+// vote, and whether their device is playing it. "Music on" means the café jukebox in the café, the store's elsewhere.
+const cafeJukebox=ref<CafeJukeboxState|null>(null),cafeVote=ref<CafeJukeboxVote>(null),cafePendingVote=ref(''),cafeVoteMessage=ref('')
+const cafeMood=computed<CafeMood|null>(()=>scene.value==='cafe'?cafeJukebox.value?.mood??null:null)
+const cafeStatus=ref<CafeMusicStatus>('off'),cafeVolume=ref(.5)
+// On the street: whether the café's rainy mood is on, which brings rain outside too.
+const streetRain=ref(false)
+let cafeVoteTimeout:ReturnType<typeof setTimeout>|undefined
+const cafeCount=computed(()=>scene.value==='cafe'?scenePlayers.value.length:0)
+let cafeMusic:CafeMusic|undefined,lastCafeAct=0
+// Chat safety for this visitor only: hide someone's messages (by their guest name, which survives reconnects) or report a line to staff.
+const mutedNames=ref<Set<string>>(new Set()),reportedIds=ref<Set<string>>(new Set()),chatMenuFor=ref('')
+const visibleChat=computed(()=>chat.value.filter(c=>c.role==='staff'||!mutedNames.value.has(c.nickname)))
+const isMutedSpeaker=(id:string)=>{const nickname=players.value.find(p=>p.id===id)?.nickname??[...chat.value].reverse().find(c=>c.id===id)?.nickname;return Boolean(nickname&&mutedNames.value.has(nickname))}
 const leaveDialog=ref<{open:()=>void;close:()=>void}|null>(null),leaving=ref(false)
 const visitThanks=useState<boolean>('visit-thanks',()=>false)
 const feedbackBox=ref<{refresh:()=>Promise<void>}|null>(null)
@@ -76,28 +101,70 @@ watch([overlay,chatTab],([value,tab])=>{if(value==='chat'&&tab==='community')unr
 // The progress bar ticks only while the jukebox panel is open.
 watch(overlay,value=>{
   clearInterval(jukeboxClockTimer);jukeboxClockTimer=undefined
-  if(value!=='jukebox')return
+  if(value!=='jukebox'&&value!=='cafe-jukebox')return
   const tick=()=>{jukeboxClock.value=musicPlayer?.serverNow()??Date.now()}
   tick();jukeboxClockTimer=setInterval(tick,500)
 })
+// Fullscreen takes the whole game frame (header, game, buttons and dialogs), so everything stays usable.
+// Hidden where the browser can't do it (iPhone Safari only allows fullscreen video).
+type FullscreenDocument=Document&{webkitFullscreenElement?:Element|null;webkitExitFullscreen?:()=>Promise<void>|void;webkitFullscreenEnabled?:boolean}
+const shell=ref<HTMLElement|null>(null),fullscreen=ref(false),fullscreenSupported=ref(false)
+function fullscreenElement(){const doc=document as FullscreenDocument;return doc.fullscreenElement??doc.webkitFullscreenElement??null}
+function onFullscreenChange(){fullscreen.value=Boolean(fullscreenElement())}
+async function toggleFullscreen(){
+  const doc=document as FullscreenDocument,el=shell.value as (HTMLElement&{webkitRequestFullscreen?:()=>Promise<void>|void})|null
+  try{
+    if(fullscreenElement())await (doc.exitFullscreen?doc.exitFullscreen():doc.webkitExitFullscreen?.())
+    else if(el)await (el.requestFullscreen?el.requestFullscreen({navigationUI:'hide'}):el.webkitRequestFullscreen?.())
+  }catch{notice.value='Fullscreen is not available right now.'}
+}
+onMounted(()=>{
+  const doc=document as FullscreenDocument
+  fullscreenSupported.value=Boolean(doc.fullscreenEnabled??doc.webkitFullscreenEnabled)
+  for(const type of ['fullscreenchange','webkitfullscreenchange'])document.addEventListener(type,onFullscreenChange)
+})
+onBeforeUnmount(()=>{for(const type of ['fullscreenchange','webkitfullscreenchange'])document.removeEventListener(type,onFullscreenChange)})
 onMounted(async()=>{
   document.addEventListener('visibilitychange',onVisibilityChanged)
   scheduleNextMenuDay()
   try { const profile=await $fetch<Me>('/api/me');if(profile.storeOpen===false){storeOpen.value=false;if(scene.value==='store'){scene.value=serverScene.value='outside';saveVisitScene('outside')}notice.value=closedNotice};me.value=profile;if(alive)setupMusic();void loadMenu();await Promise.all([loadBoard(),loadOrderInbox()]);if(alive){connect();boardRefresh=setInterval(()=>void loadBoard(),30_000);inboxTimer=setInterval(()=>void pollOrderInbox(),3000)} }
   catch { void returnHome() }
 })
-onBeforeUnmount(()=>{alive=false;sceneWait?.(false);clearTimeout(sceneReadyTimer);document.removeEventListener('visibilitychange',onVisibilityChanged);stopMusic();clearInterval(jukeboxClockTimer);clearTimeout(jukeboxVoteTimeout);clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearInterval(inboxTimer);clearTimeout(menuDayTimer);socket?.close()})
+onBeforeUnmount(()=>{alive=false;sceneWait?.(false);clearTimeout(sceneReadyTimer);document.removeEventListener('visibilitychange',onVisibilityChanged);stopMusic();cafeMusic?.dispose();cafeMusic=undefined;clearInterval(jukeboxClockTimer);clearTimeout(jukeboxVoteTimeout);clearTimeout(cafeVoteTimeout);clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearInterval(inboxTimer);clearTimeout(menuDayTimer);socket?.close()})
 function setupMusic(){
   const prefs=readJukeboxPrefs()
   musicOn.value=prefs.on;musicVolume.value=prefs.volume;musicVolumeAdjustable.value=canSetVolume()
   musicPlayer=createJukeboxPlayer(status=>{musicStatus.value=status})
   musicPlayer.setVolume(prefs.volume)
   // A remembered "on" still waits for the browser: the player asks for a tap if autoplay is blocked.
-  if(prefs.on)musicPlayer.enable()
+  if(prefs.on&&scene.value!=='cafe')musicPlayer.enable()
+  routeMusic()
 }
+// One "music on" choice: in the café it plays the café jukebox, anywhere else the store's. Never both at once.
+function routeMusic(){
+  if(!musicPlayer)return
+  if(scene.value==='cafe'){
+    musicPlayer.disable()
+    cafeMusic??=createCafeMusic(status=>{cafeStatus.value=status},()=>musicPlayer?.serverNow()??Date.now())
+    cafeVolume.value=cafeMusic.volume
+    // The café's timeline can arrive before the door animation ends and this runs.
+    const state=cafeJukebox.value
+    if(state)cafeMusic.setSession({mood:state.mood,startedAt:state.startedAt,round:state.round})
+    if(musicOn.value)void cafeMusic.play();else cafeMusic.stop()
+  }else{
+    cafeMusic?.stop()
+    if(musicOn.value)musicPlayer.enable()
+  }
+}
+watch(scene,routeMusic)
 function saveMusicPrefs(){saveJukeboxPrefs({on:musicOn.value,volume:musicVolume.value})}
 function toggleMusic(){
   if(!musicPlayer)return
+  // In the café the same switch tunes in to (or mutes) the café jukebox; a blocked start just needs this tap.
+  if(scene.value==='cafe'){
+    if(musicOn.value&&cafeStatus.value==='blocked'){void cafeMusic?.play();return}
+    musicOn.value=!musicOn.value;saveMusicPrefs();routeMusic();return
+  }
   if(musicOn.value&&musicStatus.value==='needs_gesture'){musicPlayer.resume();return}
   musicOn.value=!musicOn.value
   if(musicOn.value)musicPlayer.enable();else musicPlayer.disable()
@@ -105,6 +172,26 @@ function toggleMusic(){
 }
 function setMusicVolume(value:number){musicVolume.value=value;musicPlayer?.setVolume(value);saveMusicPrefs()}
 function stopMusic(){musicPlayer?.dispose();musicPlayer=undefined;musicStatus.value='off'}
+function setCafeVolume(value:number){cafeVolume.value=value;cafeMusic?.setVolume(value)}
+function applyCafeJukebox(state:CafeJukeboxState,myVote?:CafeJukeboxVote){
+  const roundChanged=cafeJukebox.value?.round!==state.round
+  musicPlayer?.noteStateTime(state.serverNow)
+  cafeJukebox.value=state
+  if(myVote!==undefined)cafeVote.value=myVote
+  else if(roundChanged)cafeVote.value=null
+  if(roundChanged){cafePendingVote.value='';cafeVoteMessage.value=''}
+  cafeMusic?.setSession({mood:state.mood,startedAt:state.startedAt,round:state.round})
+}
+const cafeVoteRejections:Record<string,string>={round_closed:'That set just ended. Vote again for the next one.',slow_down:'One moment, then try again.',not_in_cafe:'Only visitors in the café can vote.'}
+function voteCafeMood(mood:CafeMood){
+  const state=cafeJukebox.value
+  if(!state||!connected.value||cafePendingVote.value)return
+  if(cafeVote.value?.round===state.round&&cafeVote.value.mood===mood)return
+  cafePendingVote.value=mood;cafeVoteMessage.value=''
+  send({type:'cafe_vote',mood,round:state.round})
+  clearTimeout(cafeVoteTimeout)
+  cafeVoteTimeout=setTimeout(()=>{if(cafePendingVote.value===mood){cafePendingVote.value='';cafeVoteMessage.value='Your vote did not go through. Please try again.'}},5000)
+}
 function ping(){pingSentAt=Date.now();send({type:'ping'})}
 function applyJukebox(state:JukeboxState,myVote?:JukeboxMyVote){
   const roundChanged=jukebox.value?.round!==state.round
@@ -154,13 +241,13 @@ async function loadOrderInbox(){
     const next=await $fetch<CustomerOrderSummary[]>('/api/orders/mine')
     if(!alive)return
     const unread=next.reduce((sum,order)=>sum+order.unread,0)
-    if(inboxInitialized&&unread>privateUnread.value&&!document.hidden)playChatSound()
+    if(inboxInitialized&&unread>privateUnread.value&&!document.hidden&&storeOpen.value)playChatSound()
     inboxInitialized=true;myOrders.value=next
     if(selectedOrderId.value&&!next.some(order=>order.id===selectedOrderId.value)){selectedOrderId.value=null;orderDetail.value=null}
   }catch{}finally{inboxPolling=false}
 }
 async function pollOrderInbox(){
-  if(document.hidden||(!myOrders.value.length&&!(overlay.value==='chat'&&chatTab.value==='orders')))return
+  if(document.hidden||!storeOpen.value||(!myOrders.value.length&&!(overlay.value==='chat'&&chatTab.value==='orders')))return
   await loadOrderInbox()
   if(overlay.value==='chat'&&chatTab.value==='orders'&&selectedOrderId.value)await loadOrderDetail(selectedOrderId.value)
 }
@@ -169,7 +256,7 @@ async function loadOrderDetail(id:number){
   catch(e:any){orderChatError.value=e?.data?.statusMessage||'Could not load this conversation.'}
 }
 async function openOrder(id:number){selectedOrderId.value=id;orderDetail.value=null;orderChatError.value='';orderInboxLoading.value=true;await loadOrderDetail(id);orderInboxLoading.value=false}
-async function openOrderInbox(id:number){chatTab.value='orders';overlay.value='chat';await openOrder(id)}
+async function openOrderInbox(id:number){if(!storeOpen.value)return;chatTab.value='orders';overlay.value='chat';await openOrder(id)}
 async function scrollOrderMessages(){await nextTick();if(orderFeed.value)orderFeed.value.scrollTop=orderFeed.value.scrollHeight}
 async function sendOrderChat(){
   const text=orderMessage.value.trim(),id=selectedOrderId.value
@@ -222,6 +309,7 @@ function onMenuUpdated(version:unknown){
 }
 function onVisibilityChanged(){
   musicPlayer?.setHidden(document.hidden)
+  cafeMusic?.setHidden(document.hidden)
   if(document.hidden){hiddenAt=Date.now();return}
   if(overlay.value==='chat'&&chatTab.value==='community')unreadChat.value=0
   void loadOrderInbox()
@@ -255,14 +343,16 @@ function connect(){
       if(typeof data.storeOpen==='boolean')storeOpen.value=data.storeOpen
       serverScene.value=isScene(data.scene)?data.scene:'store'
       if(serverScene.value!==scene.value)enterScene(serverScene.value)
+      syncSelf()
       if(hasWelcomed){menuStale=true;menuEpoch++;if(!document.hidden)void loadMenu(true)}
       hasWelcomed=true
       await loadBoard()
     }
     // A list for the scene the visitor just left can still arrive while walking through a door.
-    if(data.type==='players'&&(!isScene(data.scene)||data.scene===serverScene.value)){players.value=data.players||[];if(typeof data.online==='number')onlineTotal.value=data.online}
+    if(data.type==='players'&&(!isScene(data.scene)||data.scene===serverScene.value)){players.value=data.players||[];if(typeof data.online==='number')onlineTotal.value=data.online;if(Number.isInteger(data.cafe))cafeInside.value=data.cafe}
     if(data.type==='scene_changed'&&isScene(data.scene)){
       serverScene.value=data.scene;players.value=data.players||[];if(typeof data.online==='number')onlineTotal.value=data.online
+      syncSelf()
       if(sceneWait)sceneWait(true);else if(data.scene!==scene.value)enterScene(data.scene)
     }
     if(data.type==='scene_rejected'){if(isScene(data.scene))serverScene.value=data.scene;if(data.reason==='closed'){storeOpen.value=false;notice.value=closedNotice}sceneWait?.(false)}
@@ -284,10 +374,21 @@ function connect(){
       const found=players.value.find(p=>p.id===data.id),pose:Pose=data.pose==='sit'?'sit':'stand',seat=pose==='sit'&&Number.isInteger(data.seat)?data.seat:undefined
       if(found){Object.assign(toRaw(found),{pose,seat});game.value?.setPose(data.id,pose,seat)}
     }
-    if(data.type==='sit_rejected')game.value?.setPose(selfId.value,'stand')
+    if(data.type==='sit_rejected'){selfSeated.value=false;game.value?.setPose(selfId.value,'stand')}
+    if(data.type==='player_drink'&&(isDrink(data.drink)||data.drink===null)){
+      const found=players.value.find(p=>p.id===data.id)
+      if(found)Object.assign(toRaw(found),{drink:data.drink??undefined})
+      if(data.id===selfId.value)selfDrink.value=data.drink
+      game.value?.setDrink(data.id,data.drink)
+    }
+    if(data.type==='player_act'&&data.id!==selfId.value&&isCafeAction(data.action)&&!isMutedSpeaker(data.id))game.value?.playAction(data.id,data.action)
+    if(data.type==='report_ok'&&typeof data.messageId==='string'){reportedIds.value=new Set([...reportedIds.value,data.messageId]);notice.value='Thanks for the report. Staff will take a look.'}
+    if(data.type==='report_rejected')notice.value=data.reason==='slow_down'?'You have sent a lot of reports. Please wait a minute.':'That message can no longer be reported.'
+    if(data.type==='chat_repeat')notice.value='You just said that! Try something new.'
     if(data.type==='chat'){
       const entry:ChatMessage={messageId:data.messageId,id:data.id,nickname:data.nickname,text:data.text,at:data.at,role:data.role==='staff'?'staff':'visitor',scene:isScene(data.scene)?data.scene:undefined}
       chat.value=[...chat.value.slice(-49),entry]
+      if(entry.role==='visitor'&&mutedNames.value.has(entry.nickname))return
       if(entry.id!==selfId.value){
         if(overlay.value!=='chat'||chatTab.value!=='community'||document.hidden)unreadChat.value=Math.min(99,unreadChat.value+1)
         if(!document.hidden)playChatSound()
@@ -296,7 +397,7 @@ function connect(){
       else game.value?.showBubble(entry.id,entry.text)
     }
     if(data.type==='chat_reset'){chat.value=[];unreadChat.value=0}
-    if(data.type==='emote')game.value?.showBubble(data.id,data.emoji)
+    if(data.type==='emote'&&!isMutedSpeaker(data.id))game.value?.showBubble(data.id,data.emoji)
     if(data.type==='feedback_changed')void feedbackBox.value?.refresh()
     if(data.type==='menu:updated'||data.type==='menu_changed')onMenuUpdated(data.version)
     if(data.type==='order_changed'){
@@ -312,6 +413,10 @@ function connect(){
     }
     if(data.type==='pong'&&typeof data.serverTime==='number')musicPlayer?.noteServerTime(data.serverTime,pingSentAt,Date.now())
     if(data.type==='jukebox'&&data.state&&typeof data.state==='object')applyJukebox(data.state,data.myVote)
+    if(data.type==='cafe_jukebox'&&data.state&&isCafeMood(data.state.mood)&&Number.isFinite(data.state.startedAt))applyCafeJukebox(data.state,data.myVote)
+    if(data.type==='cafe_mood'&&isCafeMood(data.mood))streetRain.value=data.mood==='rain'
+    if(data.type==='cafe_vote_ok'){clearTimeout(cafeVoteTimeout);cafePendingVote.value='';if(cafeJukebox.value?.round===data.round&&isCafeMood(data.mood))cafeVote.value={round:data.round,mood:data.mood}}
+    if(data.type==='cafe_vote_rejected'){clearTimeout(cafeVoteTimeout);cafePendingVote.value='';cafeVoteMessage.value=cafeVoteRejections[data.reason]||'Could not save your vote.'}
     if(data.type==='jukebox_votes'&&jukebox.value&&data.round===jukebox.value.round)jukebox.value={...jukebox.value,votes:data.votes||{},upNext:data.upNext??null}
     if(data.type==='jukebox_vote_ok'){clearTimeout(jukeboxVoteTimeout);jukeboxPendingVote.value='';if(jukebox.value?.round===data.round)jukeboxVote.value={round:data.round,trackId:data.trackId}}
     if(data.type==='jukebox_vote_rejected'){clearTimeout(jukeboxVoteTimeout);jukeboxPendingVote.value='';jukeboxMessage.value=jukeboxRejections[data.reason]||'Could not save your vote.'}
@@ -336,6 +441,28 @@ function connect(){
 function send(data:object){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(data))}
 function sendChat(){const text=message.value.trim();if(!connected.value||!text||text.length>160||!chatEnabled.value)return;send({type:'chat',text});message.value=''}
 function openChat(){chatTab.value='community';overlay.value='chat'}
+// A conversation starter from the chika board goes into the chat box, cursor at the end; the visitor sends it themselves.
+async function useStarter(text:string){
+  message.value=text.slice(0,160)
+  openChat();await nextTick()
+  const input=chatInput.value;if(input){input.focus();input.setSelectionRange(input.value.length,input.value.length)}
+}
+function muteSpeaker(nickname:string){mutedNames.value=new Set([...mutedNames.value,nickname]);chatMenuFor.value='';notice.value=`${nickname} is muted for you. Their messages are hidden.`}
+function unmuteAll(){mutedNames.value=new Set()}
+function reportLine(messageId:string){chatMenuFor.value='';if(!reportedIds.value.has(messageId))send({type:'report',messageId})}
+// Barista: the cup is made in the scene (brew, serve, hand over); the server then shares it with the café.
+function chooseDrink(drink:DrinkId,surprise:boolean){overlay.value='';game.value?.orderDrink(drink,surprise)}
+function onDrink(drink:DrinkId){selfDrink.value=drink;send({type:'drink',drink})}
+// Sip and relax are café actions. Reactions stay in Emotes; in the café a wave or laugh also moves the avatar.
+function cafeAction(action:CafeAction){
+  const now=Date.now()
+  if(now-lastCafeAct<800)return
+  lastCafeAct=now
+  game.value?.cafeAct(action)
+}
+function onCafeAct(action:CafeAction){send({type:'act',action})}
+// The visitor's own seat and drink as the server has them, after a welcome or a scene change.
+function syncSelf(){const own=players.value.find(p=>p.id===selfId.value);selfSeated.value=own?.pose==='sit';selfDrink.value=isDrink(own?.drink)?own.drink:null}
 // From the app-development sign: a ready-made inquiry the visitor can edit before sending,
 // with the cursor after it so anything they type is added to the end.
 async function askAboutServices(){
@@ -343,9 +470,19 @@ async function askAboutServices(){
   openChat();await nextTick()
   const input=chatInput.value;if(input){input.focus();input.setSelectionRange(input.value.length,input.value.length)}
 }
+// The store's own panels: hidden while staff have the store closed (the street board opens Orders too).
+const STORE_PANELS=new Set(['menu','board','feedback'])
+// Closing also hides the order inbox (back to community chat); reopening brings it back up to date.
+watch(storeOpen,open=>{
+  if(open){void loadOrderInbox();return}
+  if(STORE_PANELS.has(overlay.value))overlay.value=''
+  if(chatTab.value==='orders')chatTab.value='community'
+})
 function interact(kind:string){
   if(isScene(kind)){void changeScene(kind);return}
+  if(!storeOpen.value&&STORE_PANELS.has(kind)){notice.value=closedNotice;return}
   if(kind==='leave'){leaveDialog.value?.open();return}
+  if(kind==='cafe-jukebox')cafeVolume.value=cafeMusic?.volume??readCafeVolume()
   overlay.value=kind;if(kind==='menu')void loadMenu()
 }
 // Through a door: the door opens and the screen fades while the server moves the visitor, then the
@@ -362,19 +499,22 @@ async function changeScene(target:SceneId){
   })
   send({type:'scene',scene:target})
   // A hidden tab pauses the game loop, so the door animation never holds up the move for long.
-  const opened=Promise.race([game.value?.exitScene()??Promise.resolve(),new Promise(resolve=>setTimeout(resolve,1500))])
+  const opened=Promise.race([game.value?.exitScene(target)??Promise.resolve(),new Promise(resolve=>setTimeout(resolve,1500))])
   const [ok]=await Promise.all([confirmed,opened])
   if(!alive||returningHome.value)return
   if(!ok){transitionPlayers=[];game.value?.cancelExit();transitioning.value=false;if(connected.value&&storeOpen.value)notice.value='The door is stuck. Please try again.';return}
   enterScene(target)
 }
 function enterScene(target:SceneId){
+  // Seats and cups stay behind; the café's music hands back to the store's jukebox (see routeMusic).
+  if(target!=='cafe')cafeJukebox.value=null
+  selfSeated.value=false;selfDrink.value=null
   transitionPlayers=[];scene.value=target;saveVisitScene(target)
   transitioning.value=true
   clearTimeout(sceneReadyTimer);sceneReadyTimer=setTimeout(()=>{transitioning.value=false},8000)
 }
 function onSceneReady(){clearTimeout(sceneReadyTimer);transitioning.value=false}
-function sendPose(pose:{pose:Pose;seat?:number}){send(pose.pose==='sit'?{type:'sit',seat:pose.seat}:{type:'stand'})}
+function sendPose(pose:{pose:Pose;seat?:number}){selfSeated.value=pose.pose==='sit';send(pose.pose==='sit'?{type:'sit',seat:pose.seat}:{type:'stand'})}
 async function leave(){
   if(leaving.value)return
   leaving.value=true;visitThanks.value=true;clearVisitScene()
@@ -382,35 +522,48 @@ async function leave(){
   catch{visitThanks.value=false;leaving.value=false;leaveDialog.value?.close();notice.value='Could not leave right now. Please try again.'}
 }
 </script>
-<template><main class="game-shell structured-store">
+<template><main ref="shell" class="game-shell structured-store" :class="{'is-fullscreen':fullscreen}">
   <header class="structured-store-top">
-    <div class="visitor-identity"><span class="visitor-portrait"><PixelSprite :name="`head-${visitorAvatar}`" :scale="2"/></span><div class="visitor-copy"><span>{{ scene==='outside'?'NEIGHBORHOOD':'CHITS STORE' }}</span><strong :title="me?.nickname">{{ me?.nickname || 'Guest' }}</strong></div></div>
+    <div class="visitor-identity"><span class="visitor-portrait"><PixelSprite :name="`head-${visitorAvatar}`" :scale="2"/></span><div class="visitor-copy"><span>{{ scene==='outside'?'NEIGHBORHOOD':scene==='cafe'?'KAPE & CHITS':'CHITS STORE' }}</span><strong :title="me?.nickname">{{ me?.nickname || 'Guest' }}</strong></div></div>
+    <button v-if="fullscreenSupported" type="button" class="fullscreen-toggle" :aria-label="fullscreen?'Exit fullscreen':'Play fullscreen'" :aria-pressed="fullscreen" :title="fullscreen?'Exit fullscreen (Esc)':'Fullscreen'" @click="toggleFullscreen"><StoreGlyph :name="fullscreen?'collapse':'expand'"/></button>
     <div class="visit-status">
       <span class="connection-pill" :class="{ready:connected}" role="status"><span class="connection-dot" aria-hidden="true"/>{{ connected?`${online} online`:'Connecting' }}</span>
-      <button type="button" class="music-toggle" data-music-control :aria-label="musicListening?'Mute jukebox music':'Turn on jukebox music'" :aria-pressed="musicListening" :title="jukebox?.enabled&&jukebox.nowPlaying?`Now playing: ${jukebox.nowPlaying.track.title}`:undefined" :disabled="!me||returningHome" @click="toggleMusic"><StoreGlyph name="note"/>{{ musicListening?'Music on':'Music off' }}</button>
+      <button type="button" class="music-toggle" data-music-control :aria-label="scene==='cafe'?(musicListening?'Mute café music':'Turn on café music'):musicListening?'Mute jukebox music':'Turn on jukebox music'" :aria-pressed="musicListening" :title="scene!=='cafe'&&jukebox?.enabled&&jukebox.nowPlaying?`Now playing: ${jukebox.nowPlaying.track.title}`:undefined" :disabled="!me||returningHome" @click="toggleMusic"><StoreGlyph name="note"/>{{ musicListening?'Music on':'Music off' }}</button>
     </div>
   </header>
   <template v-if="me&&!returningHome">
     <div class="game-stage">
       <aside v-if="notice" class="structured-notice" role="status"><strong>{{ notice }}</strong><button type="button" aria-label="Dismiss notice" @click="notice=''">✕</button></aside>
-      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :scene="scene" :store-open="storeOpen" :daylight="daylight" :nickname="me.nickname" :avatar="me.avatar" :players="scenePlayers" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving&&!transitioning" :jukebox="jukeboxScene" :menu-items="guideMenuItems" :cat-taps="catTaps" @move="p=>{if(serverScene===scene)send({type:'move',x:p.x,y:p.y})}" @cat-tap="(name:CatName)=>send({type:'cat_tap',name})" @interact="interact" @pose="sendPose" @ready="onSceneReady"/></ClientOnly>
+      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :scene="scene" :store-open="storeOpen" :daylight="daylight" :nickname="me.nickname" :avatar="me.avatar" :players="scenePlayers" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving&&!transitioning" :jukebox="jukeboxScene" :menu-items="guideMenuItems" :cat-taps="catTaps" :cafe-music="cafeMood" :sky-minute="skyMinute" :cafe-count="cafeInside" :raining="scene==='outside'&&streetRain" @drink="onDrink" @act="onCafeAct" @move="p=>{if(serverScene===scene)send({type:'move',x:p.x,y:p.y})}" @cat-tap="(name:CatName)=>send({type:'cat_tap',name})" @interact="interact" @pose="sendPose" @ready="onSceneReady"/></ClientOnly>
     </div>
-    <button v-if="featuredOrder" type="button" class="order-inbox-shortcut" :class="{'has-reply':privateUnread>0}" :aria-label="privateUnread?`Order inbox, ${privateUnread} unread staff ${privateUnread===1?'reply':'replies'}. Open order ${featuredOrder.number}`:`Open order inbox for order ${featuredOrder.number}`" @click="openOrderInbox(featuredOrder.id)"><span class="order-inbox-shortcut-icon"><StoreGlyph name="chat"/><span v-if="privateUnread" class="order-inbox-shortcut-count" aria-hidden="true">{{ privateUnread>9?'9+':privateUnread }}</span></span><span class="order-inbox-shortcut-copy"><strong>{{ privateUnread?'New reply from staff':'Your order inbox' }}</strong><small>Order #{{ featuredOrder.number }}{{ featuredOrder.name?` · ${featuredOrder.name}`:'' }} · {{ orderStatusLabels[featuredOrder.status] }}</small></span><span class="order-inbox-shortcut-action">{{ privateUnread?'Read reply':'Open inbox' }} →</span></button>
-    <nav class="structured-actions" aria-label="Store actions">
+    <button v-if="featuredOrder&&storeOpen" type="button" class="order-inbox-shortcut" :class="{'has-reply':privateUnread>0}" :aria-label="privateUnread?`Order inbox, ${privateUnread} unread staff ${privateUnread===1?'reply':'replies'}. Open order ${featuredOrder.number}`:`Open order inbox for order ${featuredOrder.number}`" @click="openOrderInbox(featuredOrder.id)"><span class="order-inbox-shortcut-icon"><StoreGlyph name="chat"/><span v-if="privateUnread" class="order-inbox-shortcut-count" aria-hidden="true">{{ privateUnread>9?'9+':privateUnread }}</span></span><span class="order-inbox-shortcut-copy"><strong>{{ privateUnread?'New reply from staff':'Your order inbox' }}</strong><small>Order #{{ featuredOrder.number }}{{ featuredOrder.name?` · ${featuredOrder.name}`:'' }} · {{ orderStatusLabels[featuredOrder.status] }}</small></span><span class="order-inbox-shortcut-action">{{ privateUnread?'Read reply':'Open inbox' }} →</span></button>
+    <nav class="structured-actions" :class="{'store-closed':!storeOpen}" aria-label="Store actions">
       <button type="button" class="store-chat-action" aria-label="Chat" :aria-describedby="allUnread?'store-chat-unread':undefined" @click="openChat"><StoreGlyph name="chat"/><span>Chat</span><span v-if="allUnread" class="chat-unread-badge" aria-hidden="true">{{ allUnread>9?'9+':allUnread }}</span><span id="store-chat-unread" class="chat-sr-only">{{ allUnread }} unread {{ allUnread===1?'message':'messages' }}</span></button>
-      <button type="button" @click="interact('menu')"><StoreGlyph name="book"/><span>Menu</span></button>
-      <button type="button" @click="overlay='board'"><StoreGlyph name="orders"/><span>Orders</span></button>
+      <button v-if="storeOpen" type="button" @click="interact('menu')"><StoreGlyph name="book"/><span>Menu</span></button>
+      <button v-if="storeOpen" type="button" @click="interact('board')"><StoreGlyph name="orders"/><span>Orders</span></button>
       <button type="button" @click="overlay='emotes'"><StoreGlyph name="cat"/><span>Emotes</span></button>
-      <button type="button" @click="overlay='feedback'"><StoreGlyph name="pencil"/><span>Feedback</span></button>
+      <button v-if="storeOpen" type="button" @click="interact('feedback')"><StoreGlyph name="pencil"/><span>Feedback</span></button>
       <button type="button" @click="leaveDialog?.open()"><StoreGlyph name="door"/><span>Leave</span></button>
     </nav>
-    <div v-if="scene==='outside'" class="structured-hint"><p class="cat-hint-copy"><span>{{ storeOpen?'Sit on the bench · try the vending machine':'The store is closed for now · hang out on the street' }}</span></p><button type="button" class="cat-action go-inside" :aria-label="storeOpen?'Walk back into Chits Store':'Chits Store is closed'" :disabled="!!overlay||transitioning||!storeOpen" @click="game?.goInside()"><StoreGlyph name="door"/>{{ storeOpen?'Go inside':'Closed' }}</button></div>
+    <div v-if="scene==='outside'" class="structured-hint"><p class="cat-hint-copy"><span>{{ storeOpen?'Sit on the bench · kape next door':'Store closed · Kape & Chits is open 24/7' }}</span></p><button type="button" class="cat-action go-cafe" aria-label="Walk into Kape & Chits, the 24/7 coffee shop" :disabled="!!overlay||transitioning" @click="game?.goToCafe()"><StoreGlyph name="cup"/>Café</button><button type="button" class="cat-action go-inside" :aria-label="storeOpen?'Walk back into Chits Store':'Chits Store is closed'" :disabled="!!overlay||transitioning||!storeOpen" @click="game?.goInside()"><StoreGlyph name="door"/>{{ storeOpen?'Store':'Closed' }}</button></div>
+    <div v-else-if="scene==='cafe'" class="structured-hint cafe-hint">
+      <p class="cat-hint-copy cafe-count" role="status" :aria-label="`${cafeCount} in the café`"><StoreGlyph name="people"/><strong>{{ cafeCount }}</strong><span>in the café · tap a seat</span></p>
+      <div class="cafe-acts" role="group" aria-label="Café actions">
+        <button type="button" class="cafe-act" :disabled="!selfDrink||!!overlay" :title="selfDrink?'Take a sip':'Get a drink from the barista first'" @click="cafeAction('sip')"><PixelSprite :name="`cup-${selfDrink??'hot-latte'}`" :scale="2"/>Sip</button>
+        <button type="button" class="cafe-act" :disabled="!!overlay" @click="cafeAction('relax')"><span class="cafe-act-glyph" aria-hidden="true">~</span>Relax</button>
+        <button v-if="!selfSeated" type="button" class="cafe-act view-act" :disabled="!!overlay" aria-label="Enjoy the view: walk to the deck's railing" @click="game?.enjoyView()"><StoreGlyph name="view"/>View</button>
+        <button v-if="selfSeated" type="button" class="cafe-act stand-up" :disabled="!!overlay" @click="game?.standUp()"><span class="cafe-act-glyph" aria-hidden="true">↑</span>Stand</button>
+      </div>
+    </div>
     <div v-else-if="catEnabled" class="structured-hint"><p class="cat-hint-copy"><span class="cat-hint-faces"><PixelSprite name="cat-face" :scale="2"/><PixelSprite name="onay-face" :scale="2"/></span><span>Drag yarn · tap Miming or Onay to pet</span></p><button type="button" class="cat-action toss-yarn" aria-label="Toss yarn for Miming and Onay, the shop cats" :disabled="!!overlay" @click="game?.tossYarn()"><StoreGlyph name="yarn"/>Toss yarn</button></div>
     <div v-if="overlay" class="overlay-shade" :class="{'chat-overlay':overlay==='chat'||overlay==='jukebox'}" @click.self="overlay=''">
       <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback','chat-dialog':overlay==='chat','jukebox-dialog':overlay==='jukebox','order-chat-dialog':overlay==='chat'&&chatTab==='orders'&&!!selectedOrderId}" role="dialog" aria-labelledby="store-dialog-title">
-        <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ overlay==='chat'?(chatTab==='orders'?'Order inbox':'Community chat'):{menu:"Today's Menu",board:'Live Order Board',cashier:'Staff',chef:'Chef',emotes:'Reactions',feedback:'Feedback box',jukebox:'Jukebox',services:'App development',vending:'Vending machine'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
+        <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ overlay==='chat'?(chatTab==='orders'?'Order inbox':'Community chat'):{menu:"Today's Menu",board:'Live Order Board',cashier:'Staff',chef:'Chef',emotes:'Reactions',feedback:'Feedback box',jukebox:'Jukebox',services:'App development',vending:'Vending machine',barista:'Barista','cafe-board':'Chika board','cafe-jukebox':'Café jukebox'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
         <FeedbackBox v-if="overlay==='feedback'" ref="feedbackBox"/>
-        <VendingPanel v-if="overlay==='vending'" @vend="game?.vend()" @menu="interact('menu')"/>
+        <VendingPanel v-if="overlay==='vending'" :menu-available="storeOpen" @vend="game?.vend()" @menu="interact('menu')"/>
+        <CafeBaristaPanel v-if="overlay==='barista'" :holding="selfDrink" @choose="chooseDrink"/>
+        <CafeBoardPanel v-if="overlay==='cafe-board'" @use="useStarter"/>
+        <CafeJukeboxPanel v-if="overlay==='cafe-jukebox'" :state="cafeJukebox" :my-vote="cafeVote" :pending-vote="cafePendingVote" :message="cafeVoteMessage" :status="cafeStatus" :music-on="musicOn" :volume="cafeVolume" :server-now="jukeboxClock" :connected="connected" @vote="voteCafeMood" @toggle="toggleMusic" @volume="setCafeVolume"/>
         <JukeboxPanel v-if="overlay==='jukebox'" :state="jukebox" :my-vote="jukeboxVote" :pending-vote="jukeboxPendingVote" :message="jukeboxMessage" :status="musicStatus" :music-on="musicOn" :volume="musicVolume" :volume-adjustable="musicVolumeAdjustable" :server-now="jukeboxClock" :connected="connected" @vote="voteJukebox" @toggle="toggleMusic" @volume="setMusicVolume"/>
         <template v-if="overlay==='menu'">
           <p class="menu-greeting">🍡 Hi, {{ me.nickname }}! Here’s the meryenda for {{ menuDate }}.</p>
@@ -435,8 +588,8 @@ async function leave(){
         <template v-else-if="overlay==='services'"><p class="menu-greeting">📱 💻 Need custom software or a mobile app?</p><p>Besides meryenda, our team also builds custom software and mobile apps. Message our staff to inquire about your project. We would love to hear your idea!</p><button type="button" class="btn small dialog-action" @click="askAboutServices">Message staff</button><p class="privacy">This opens the community chat with a message ready to send. The chat is public, so please don't share personal details there.</p></template>
         <template v-else-if="overlay==='emotes'"><div class="reaction-grid"><button v-for="reaction in reactionOptions" :key="reaction.emoji" type="button" class="btn secondary reaction-choice" @click="send({type:'emote',emoji:reaction.emoji});overlay=''"><PixelReaction class="reaction-symbol" :emoji="reaction.emoji"/><span>{{ reaction.label }}</span></button></div></template>
         <template v-else-if="overlay==='chat'">
-          <div class="chat-tabs" role="tablist" aria-label="Chat conversations"><button type="button" role="tab" :aria-selected="chatTab==='community'" @click="chatTab='community'">Community <span v-if="unreadChat">{{ unreadChat }}</span></button><button type="button" role="tab" :aria-selected="chatTab==='orders'" @click="chatTab='orders';void loadOrderInbox()">Order inbox <span v-if="privateUnread">{{ privateUnread }}</span></button></div>
-          <template v-if="chatTab==='community'"><div class="chat-messages" aria-live="polite"><div v-if="chat.length===0" class="muted help-text chat-empty">Say hello! Chat messages are temporary.</div><div v-for="c in chat" :key="c.messageId" class="chat-line" :class="{'staff-reply':c.role==='staff'}"><span v-if="c.role==='staff'" class="chat-staff-tag">STAFF</span><span v-else-if="c.scene&&c.scene!==scene" class="chat-staff-tag chat-place-tag">{{ scenes[c.scene].label.toUpperCase() }}</span><strong>{{ c.nickname }}:</strong> {{ c.text }}</div></div><form class="chat-form" @submit.prevent="sendChat"><input ref="chatInput" v-model="message" class="input" maxlength="160" aria-label="Chat message" placeholder="Say hi..." autocomplete="off"><button class="btn small" type="submit" :disabled="!connected||!message.trim()||!chatEnabled">Send</button></form><p v-if="!chatEnabled" class="privacy">Chat is temporarily disabled by staff.</p><p class="privacy">Public room, shared inside the store and out on the street: do not share personal details. Staff can mute or remove visitors. Chat is not permanently stored.</p></template>
+          <div v-if="storeOpen" class="chat-tabs" role="tablist" aria-label="Chat conversations"><button type="button" role="tab" :aria-selected="chatTab==='community'" @click="chatTab='community'">Community <span v-if="unreadChat">{{ unreadChat }}</span></button><button type="button" role="tab" :aria-selected="chatTab==='orders'" @click="chatTab='orders';void loadOrderInbox()">Order inbox <span v-if="privateUnread">{{ privateUnread }}</span></button></div>
+          <template v-if="chatTab==='community'"><div class="chat-messages" aria-live="polite"><div v-if="visibleChat.length===0" class="muted help-text chat-empty">Say hello! Chat messages are temporary.</div><div v-for="c in visibleChat" :key="c.messageId" class="chat-line" :class="{'staff-reply':c.role==='staff'}"><span v-if="c.role==='staff'" class="chat-staff-tag">STAFF</span><span v-else-if="c.scene&&c.scene!==scene" class="chat-staff-tag chat-place-tag">{{ scenes[c.scene].label.toUpperCase() }}</span><strong>{{ c.nickname }}:</strong> {{ c.text }}<button v-if="c.role==='visitor'&&c.id!==selfId" type="button" class="chat-line-more" :aria-expanded="chatMenuFor===c.messageId" :aria-label="`Options for ${c.nickname}'s message`" @click="chatMenuFor=chatMenuFor===c.messageId?'':c.messageId">⋯</button><span v-if="chatMenuFor===c.messageId" class="chat-line-menu"><button type="button" @click="muteSpeaker(c.nickname)">Mute {{ c.nickname }}</button><button type="button" :disabled="reportedIds.has(c.messageId)" @click="reportLine(c.messageId)">{{ reportedIds.has(c.messageId)?'Reported':'Report' }}</button></span></div></div><p v-if="mutedNames.size" class="privacy">You muted {{ mutedNames.size }} {{ mutedNames.size===1?'visitor':'visitors' }}. <button type="button" class="chat-unmute" @click="unmuteAll">Unmute all</button></p><form class="chat-form" @submit.prevent="sendChat"><input ref="chatInput" v-model="message" class="input" maxlength="160" aria-label="Chat message" placeholder="Say hi..." autocomplete="off"><button class="btn small" type="submit" :disabled="!connected||!message.trim()||!chatEnabled">Send</button></form><p v-if="!chatEnabled" class="privacy">Chat is temporarily disabled by staff.</p><p class="privacy">Public room, shared in the store, the café and out on the street: do not share personal details. Use ⋯ to mute or report someone; staff can mute or remove visitors. Chat is not permanently stored.</p></template>
           <template v-else><div v-if="myOrders.length" class="order-inbox-list"><button v-for="order in myOrders" :key="order.id" type="button" :class="{selected:selectedOrderId===order.id}" @click="openOrder(order.id)"><strong>#{{ order.number }} <span v-if="order.unread" class="order-inbox-unread">{{ order.unread }}</span></strong><small>{{ orderStatusLabels[order.status] }} · {{ money(order.totalCentavos) }}</small></button></div><p v-else class="menu-message">Your placed orders will appear here. Choose items from Today’s Menu to start.</p>
             <p v-if="orderInboxLoading" class="help-text">Opening order conversation…</p>
             <template v-if="orderDetail&&selectedOrderId===orderDetail.order.id"><details class="order-chat-summary"><summary><span><strong>Order #{{ orderDetail.order.number }}{{ orderDetail.order.name?` · ${orderDetail.order.name}`:'' }}</strong> · {{ orderStatusLabels[orderDetail.order.status] }} · {{ money(orderDetail.order.totalCentavos) }}</span><small>Items ▾</small></summary><div v-for="item in orderDetail.items" :key="item.id"><span>{{ item.quantity }} × {{ item.name }}</span><span>{{ money(item.lineTotalCentavos) }}</span></div></details><div ref="orderFeed" class="chat-messages order-chat-messages" role="log" aria-label="Private order conversation" aria-live="polite"><div v-for="entry in orderDetail.messages" :key="entry.id" class="chat-line" :class="{'staff-reply':entry.role==='staff'}"><strong>{{ entry.role==='system'?'Order':entry.role==='staff'?'Chits Store':'You' }}:</strong> {{ entry.text }}</div></div><form class="chat-form" @submit.prevent="sendOrderChat"><input v-model="orderMessage" class="input" maxlength="500" aria-label="Message staff about this order" placeholder="Message staff about this order…" autocomplete="off"><button class="btn small" type="submit" :disabled="orderSending||!orderMessage.trim()">{{ orderSending?'Sending…':'Send' }}</button></form><p class="privacy">Only you and store staff can see this order conversation.</p></template>
@@ -499,6 +652,32 @@ async function leave(){
 .checkout-confirmation .btn.secondary{border-color:#a17b50;background:#eddbb8;color:#674731;box-shadow:2px 2px 0 #a17b50}
 .checkout-confirmation .btn:disabled{opacity:.6;cursor:default}.checkout-confirmation .btn:focus-visible{outline:3px solid #617e4d;outline-offset:2px}
 @media(max-width:360px){.checkout-confirmation-content{padding:16px}.checkout-confirmation-actions{grid-template-columns:1fr}}
+/* While the store is closed only Chat, Emotes and Leave remain. */
+.structured-actions.store-closed{grid-template-columns:repeat(3,minmax(0,1fr))}
+/* Fullscreen: the frame fills the screen edge to edge. */
+.fullscreen-toggle{display:grid;place-items:center;flex-shrink:0;width:40px;height:40px;padding:0;border:2px solid #d4b68a;border-radius:6px;background:#f6e9cf;color:#7a5a3c;box-shadow:0 2px 0 #d4b68a;cursor:pointer}
+.fullscreen-toggle[aria-pressed="true"]{border-color:#b5d4a0;background:#e6f2da;color:#3d7a34;box-shadow:0 2px 0 #b5d4a0}
+.fullscreen-toggle svg{width:20px;height:20px}.fullscreen-toggle:active{transform:translateY(2px);box-shadow:none}
+.fullscreen-toggle:focus-visible{outline:3px solid #617e4d;outline-offset:2px}
+.structured-store.is-fullscreen{width:100%;height:100%;min-height:0;margin:0;border:0;border-radius:0;box-shadow:none}
+@media(prefers-reduced-motion:reduce){.fullscreen-toggle:active{transform:none}}
+/* Kape & Chits: the café button on the street, the in-café action bar, and per-line chat options. */
+.go-cafe{--shade:#c9a06c;border-color:#8a6446;background:#f6e3c4;color:#5e3d27}
+.cafe-hint{align-items:center}
+.structured-hint .cafe-count{flex:1 1 auto;min-width:0;gap:6px;color:#3f5a45}.cafe-count svg{flex-shrink:0;width:16px;height:16px}.cafe-count strong{font:12px/1 Silkscreen,monospace;font-weight:400;color:#3f5a45}
+.cafe-acts{display:flex;justify-content:flex-end;gap:6px;flex:0 0 auto}
+.cafe-act{display:flex;flex:0 0 72px;flex-direction:column;align-items:center;justify-content:center;gap:3px;max-width:72px;min-width:0;min-height:50px;padding:4px 2px;border:2px solid #8a6446;border-radius:6px;background:#f6e3c4;color:#5e3d27;font:8px/1 Silkscreen,monospace;text-transform:uppercase;box-shadow:0 3px 0 #c9a06c;cursor:pointer}
+.cafe-act .pixel-sprite{width:auto;height:22px}.cafe-act svg{width:20px;height:20px}
+.cafe-act-glyph{display:grid;place-items:center;height:22px;font:16px/1 Silkscreen,monospace}
+.cafe-act.stand-up{border-color:#91aa6f;background:#e6f2da;color:#3d7a34;box-shadow:0 3px 0 #b5d4a0}
+.cafe-act:active:not(:disabled){transform:translateY(2px);box-shadow:0 1px 0 #c9a06c}.cafe-act:disabled{opacity:.5;cursor:default}
+.cafe-act:focus-visible,.chat-line-more:focus-visible,.chat-line-menu button:focus-visible,.chat-unmute:focus-visible{outline:3px solid #617e4d;outline-offset:2px}
+.chat-line-more{margin-left:6px;padding:0 6px;border:1px solid #d9c4a3;border-radius:4px;background:#fff8ea;color:#886748;font:12px/1.4 monospace;vertical-align:middle;cursor:pointer}
+.chat-line-menu{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 2px}
+.chat-line-menu button,.chat-unmute{min-height:32px;padding:4px 8px;border:1px solid #c7a576;background:#fff7e5;color:#674731;font:9px/1.2 Silkscreen,monospace;cursor:pointer}
+.chat-line-menu button:disabled{opacity:.6;cursor:default}.chat-unmute{min-height:0;padding:2px 6px}
+@media(max-width:420px){.cafe-acts{gap:4px}.cafe-act{flex-basis:60px}}
+@media(prefers-reduced-motion:reduce){.cafe-act:active:not(:disabled){transform:none}}
 </style>
 
 <style scoped src="../assets/css/pixel-store.css"/>

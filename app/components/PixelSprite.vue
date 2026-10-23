@@ -1,9 +1,10 @@
 <script lang="ts">
 import {uiSpriteArt} from '../../game/pixelArt'
+import {cafeSpriteArt} from '../../game/cafeArt'
 // Sprites are drawn once per name and reused as data URLs.
 const cache=new Map<string,{src:string;width:number;height:number}>()
 function sprite(name:string){
-  if(!cache.has(name)){const art=uiSpriteArt(name);if(!art)return undefined;cache.set(name,{src:art.toCanvas().toDataURL(),width:art.width,height:art.height})}
+  if(!cache.has(name)){const art=cafeSpriteArt(name)??uiSpriteArt(name);if(!art)return undefined;cache.set(name,{src:art.toCanvas().toDataURL(),width:art.width,height:art.height})}
   return cache.get(name)
 }
 </script>

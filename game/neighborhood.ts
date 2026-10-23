@@ -1,18 +1,24 @@
 import Phaser from 'phaser'
 import {avatarOptions,type AvatarId} from '../shared/avatars'
-import {benchSeats,scenes,type Pose} from '../shared/world'
+import {arrivalSpot,benchSeats,scenes,type Pose,type SceneId} from '../shared/world'
 import * as art from './pixelArt'
 import * as street from './neighborhoodArt'
-import {MAX_VIEW_W,MIN_VIEW_W,BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,NAME_TAG_GAP,PX,TAG_FONT,Tag,addTexture,characterPhase,createReactionTextures,currentDaylight,findPath,isHalloweenSeason,reactionTexture,setDepthIfChanged,slideDoor,tagDepth,tapSparks,visitorFrame,type BoardOrder,type Player,type WorldGame} from './common'
+import {handUmbrellaArt} from './deckArt'
+import {MAX_VIEW_W,MIN_VIEW_W,BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,NAME_TAG_GAP,PX,TAG_FONT,Tag,addTexture,characterPhase,createReactionTextures,currentDaylight,drawRain,findPath,isHalloweenSeason,reactionTexture,setDepthIfChanged,slideDoor,tagDepth,tapSparks,visitorFrame,type BoardOrder,type Player,type WorldGame} from './common'
 
 // Chits Neighborhood: the street outside the store. Loaded only when a visitor steps outside, as its own Phaser game.
-export type NeighborhoodGame = WorldGame & {setPose:(id:string,pose:Pose,seat?:number)=>void;setBoard:(orders:BoardOrder[])=>void;vend:()=>void;goInside:()=>void;setStoreOpen:(open:boolean)=>void}
-type Options = {nickname:string;avatar:AvatarId;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onPose:(pose:Pose,seat?:number)=>void;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;daylight?:street.Daylight;viewWidth?:number;storeOpen?:boolean}
+export type NeighborhoodGame = WorldGame & {setPose:(id:string,pose:Pose,seat?:number)=>void;setBoard:(orders:BoardOrder[])=>void;vend:()=>void;goInside:()=>void;goToCafe:()=>void;setStoreOpen:(open:boolean)=>void;setCafeCount:(count:number)=>void;setRain:(on:boolean)=>void}
+// from: the place the visitor just walked out of, so they appear (and the door closes) where they came out.
+type Options = {nickname:string;avatar:AvatarId;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onPose:(pose:Pose,seat?:number)=>void;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;from?:SceneId;daylight?:street.Daylight;viewWidth?:number;storeOpen?:boolean}
 // lift: how far the art is drawn above the network position (sitting draws the visitor up on the seat).
-type Visitor = {sprite:Phaser.GameObjects.Image;label:Tag;avatar:string;phase:number;movingUntil:number;bubble?:Tag|Phaser.GameObjects.Image;pose:Pose;seat?:number;sitSince:number;lift:number}
+type Visitor = {sprite:Phaser.GameObjects.Image;label:Tag;avatar:string;phase:number;movingUntil:number;bubble?:Tag|Phaser.GameObjects.Image;pose:Pose;seat?:number;sitSince:number;lift:number;umbrella?:Phaser.GameObjects.Image}
 
-const {width:W,height:H,floor,spawn}=scenes.outside,CELL=20
+const {width:W,height:H,floor}=scenes.outside,CELL=20
 const DOOR={x:360,y:206,standY:280,halfWidth:24,triggerY:272,pushMs:220}
+// Kape & Chits, open 24/7 where Hugot Burger used to be. Its glass doors work like the store's.
+const CAFE_DOOR={x:600,y:206,standY:280}
+const CAFE_SIGN={x:652,y:276}
+const CAFE_FRONT=new Phaser.Geom.Rectangle(504,80,192,176)
 // Drawn lift of a seated visitor: from their floor spot in front of the bench up onto the seat.
 const SEAT_LIFT=32,SIT_MS=220
 const BENCH={x:120,y:282}
@@ -25,16 +31,17 @@ const SIDE=(MAX_VIEW_W-W)/2
 const ENDS=[{y:300,name:'big-pot'},{y:392,name:'barricade'},{y:446,name:'barricade'},{y:512,name:'big-pot'}]
 const LAMPS=[{x:210,y:298},{x:540,y:298},{x:250,y:472}]
 const TREES=[{x:70,y:468},{x:650,y:468}]
-// Closed neighbors, reserved for future expansion. Their bubbles sit above the sign board, not over it.
+// A closed neighbor, reserved for future expansion. Its bubble sits above the sign board, not over it.
 const SHOPS=[
   {area:new Phaser.Geom.Rectangle(24,88,192,168),x:120,y:110,lines:['Coming soon! A sari-sari store is opening here.','Coming soon! Snacks and sundries, right next door.']},
-  {area:new Phaser.Geom.Rectangle(504,88,192,168),x:600,y:110,lines:['Coming soon! Hugot Burger is firing up the grill.','Coming soon! Burgers with feelings, right next door.']},
 ]
+const CAFE_SIGN_LINES=['Kape & Chits: free virtual kape, open 24/7. Pasok!','Tambay muna! Free kape inside, all day, all night.','Open for chill conversations. Pasok!']
+const tambays=(count:number)=>`${count} ${count===1?'tambay':'tambays'} inside`
 // A jack-o'-lantern by the door in the Halloween season, as inside.
 const HALLOWEEN=isHalloweenSeason()
-// Floor footprints: bench, vending machine, order board, door plant, three lamp posts, two tree trunks, the planter.
+// Floor footprints: bench, vending machine, order board, door plant, the café sign, three lamp posts, two tree trunks, the planter.
 const obstacles=[
-  {x:84,y:262,w:72,h:32},{x:476,y:262,w:48,h:18},{x:398,y:262,w:52,h:34},{x:304,y:262,w:24,h:18},
+  {x:84,y:262,w:72,h:32},{x:476,y:262,w:48,h:18},{x:398,y:262,w:52,h:34},{x:304,y:262,w:24,h:18},{x:632,y:266,w:40,h:36},
   ...LAMPS.map(lamp=>({x:lamp.x-10,y:lamp.y+32,w:20,h:18})),
   ...TREES.map(tree=>({x:tree.x-14,y:tree.y+28,w:28,h:20})),
   {x:432,y:512,w:56,h:30},
@@ -67,9 +74,13 @@ class NeighborhoodScene extends Phaser.Scene{
   private afterPath?:()=>void
   private keys?:Record<string,Phaser.Input.Keyboard.Key>
   private lastMove=0
-  private lastX=spawn.x
-  private lastY=spawn.y
+  private lastX:number
+  private lastY:number
   private door?:Phaser.GameObjects.Image
+  private cafeDoor?:Phaser.GameObjects.Image
+  private neon?:{text:Phaser.GameObjects.Text;glow:Phaser.GameObjects.Image}
+  // The door being walked through while the screen fades, so a refusal closes the right one.
+  private exitDoor?:{door:Phaser.GameObjects.Image;prefix:string}
   private doorPush=0
   private doorTriggered=false
   private doorReadyAt=0
@@ -93,8 +104,19 @@ class NeighborhoodScene extends Phaser.Scene{
   // While staff have the store closed: a CLOSED sign on the doors, the lights off, and the door stays locked.
   private storeOpen=true
   private closedSign?:Phaser.GameObjects.Container
+  // How many are in Kape & Chits right now (a count from the server, never names), shown over its sidewalk sign.
+  private cafeCount=0
+  private cafeCountTag?:Tag
+  // It rains on the street while Kape & Chits plays its rainy mood: a grey wash, rain, and an umbrella for everyone.
+  private raining=false
+  private rainWash?:Phaser.GameObjects.Rectangle
+  private rainFx?:Phaser.GameObjects.Graphics
+  private rainFrame=-2
   private lightsOff?:Phaser.GameObjects.Graphics
-  constructor(opts:Options){super('Neighborhood');this.opts=opts;this.zoom=opts.zoom??1}
+  constructor(opts:Options){super('Neighborhood');this.opts=opts;this.zoom=opts.zoom??1;({x:this.lastX,y:this.lastY}=this.start)}
+  // Where the visitor appears: by the door they came out of.
+  private get start(){return arrivalSpot('outside',this.opts.from)}
+  private get fromCafe(){return Boolean(this.opts.arriving)&&this.opts.from==='cafe'}
   private sprite(x:number,y:number,name:string,depth:number){return this.add.image(x,y,name).setScale(PX).setDepth(depth)}
   // Standing furniture: depth follows the object's base so visitors walk in front and behind.
   private floorSprite(x:number,y:number,name:string){const image=this.sprite(x,y,name,0);image.setDepth(y+image.displayHeight/2-14);return image}
@@ -121,9 +143,16 @@ class NeighborhoodScene extends Phaser.Scene{
     this.sprite(sign.x-sign.width/2-26,80,'head-palitaw',LIT_DEPTH)
     this.text(360,90,'MERYENDA HUB',8,'#f6e3c0',LIT_DEPTH)
     this.text(120,126,'SARI-SARI',10,'#fff8ea',2).setShadow(0,1,'#2d4f4a',0,false,true)
-    this.text(600,126,'HUGOT BURGER',10,'#fff8ea',2).setShadow(0,1,'#3b2619',0,false,true)
-    for(const x of [120,600])this.text(x,190,'COMING SOON',8,'#5e3d27',2)
-    this.door=this.sprite(DOOR.x,DOOR.y,this.opts.arriving?'shop-door-3':'shop-door-0',1)
+    this.text(120,190,'COMING SOON',8,'#5e3d27',2)
+    this.text(600,116,'KAPE & CHITS',10,'#fff3d6',LIT_DEPTH).setShadow(0,1,'#22392f',0,false,true)
+    // OPEN 24/7 glows softly in the café's left window, day and night.
+    const glow=this.sprite(542,186,'neon-glow',LIGHT_DEPTH).setBlendMode(Phaser.BlendModes.ADD)
+    this.neon={glow,text:this.add.text(542,186,'OPEN\n24/7',{fontFamily:FONT,fontSize:'8px',color:'#ffb347',align:'center',lineSpacing:1,resolution:this.zoom}).setOrigin(.5).setDepth(LIT_DEPTH).setShadow(0,0,'#ff8a3d',4,false,true)}
+    this.door=this.sprite(DOOR.x,DOOR.y,this.opts.arriving&&!this.fromCafe?'shop-door-3':'shop-door-0',1)
+    this.cafeDoor=this.sprite(CAFE_DOOR.x,CAFE_DOOR.y,this.fromCafe?'cafe-door-3':'cafe-door-0',1)
+    const cafeSign=this.floorSprite(CAFE_SIGN.x,CAFE_SIGN.y,'cafe-sign')
+    this.text(CAFE_SIGN.x,CAFE_SIGN.y+11,'KAPE',8,'#fff6e2',cafeSign.depth+1)
+    this.cafeCountTag=this.tag(CAFE_SIGN.x,CAFE_SIGN.y-32,tambays(0)).setDepth(cafeSign.depth+2).setVisible(false)
     // Darkened windows and door glass, and the sign, shown only while the store is closed.
     this.lightsOff=this.add.graphics().setDepth(1.5).fillStyle(0x2f2a33,.55)
     for(const x of STORE_WINDOWS)this.lightsOff.fillRect(x-36,146,72,76)
@@ -143,9 +172,12 @@ class NeighborhoodScene extends Phaser.Scene{
     this.floorSprite(460,528,'planter')
     this.trees=TREES.map(({x,y})=>({sprite:this.floorSprite(x,y,'tree-0'),rustleUntil:0}))
     this.shade=this.add.rectangle(-SIDE,0,W+SIDE*2,H,0,0).setOrigin(0).setDepth(SHADE_DEPTH)
+    this.rainWash=this.add.rectangle(-SIDE,0,W+SIDE*2,H,0x4f5b6b,.22).setOrigin(0).setDepth(SHADE_DEPTH-1).setVisible(false)
+    this.rainFx=this.add.graphics().setDepth(LIT_DEPTH+1)
     for(const x of STORE_WINDOWS)this.windowGlows.push(this.sprite(x,184,'window-glow',LIGHT_DEPTH).setBlendMode(Phaser.BlendModes.ADD))
     for(const w of street.EDGE_WINDOWS)for(const x of [(w.x-street.EDGE.width)*PX,W+(street.EDGE.width-w.x)*PX])
       this.windowGlows.push(this.sprite(x,w.y*PX,'house-glow',LIGHT_DEPTH).setBlendMode(Phaser.BlendModes.ADD))
+    for(const w of street.CAFE_FRONT_WINDOWS)this.windowGlows.push(this.sprite(w.x*PX,w.y*PX,'window-glow',LIGHT_DEPTH).setBlendMode(Phaser.BlendModes.ADD))
     this.lamps=LAMPS.map(({x,y})=>({post:this.floorSprite(x,y,'lamp-off'),x,y,flareUntil:0,
       glow:this.sprite(x,y-38,'lamp-glow',LIGHT_DEPTH).setBlendMode(Phaser.BlendModes.ADD),
       pool:this.sprite(x,y+50,'light-pool',LIGHT_DEPTH).setBlendMode(Phaser.BlendModes.ADD)}))
@@ -153,14 +185,16 @@ class NeighborhoodScene extends Phaser.Scene{
     this.applyDaylight()
     this.time.addEvent({delay:60_000,loop:true,callback:()=>{const next=this.opts.daylight??currentDaylight();if(next!==this.daylight){this.daylight=next;this.applyDaylight()}}})
     const avatar=this.textures.exists(this.opts.avatar)?this.opts.avatar:'mochi'
-    const sprite=this.sprite(spawn.x,spawn.y,avatar,spawn.y+10)
-    this.self={sprite,label:this.tag(spawn.x,spawn.y-NAME_TAG_GAP,this.opts.nickname).setDepth(tagDepth(spawn.y)),avatar,phase:characterPhase(this.opts.nickname),movingUntil:0,pose:'stand',sitSince:0,lift:0}
+    const start=this.start
+    const sprite=this.sprite(start.x,start.y,avatar,start.y+10)
+    this.self={sprite,label:this.tag(start.x,start.y-NAME_TAG_GAP,this.opts.nickname).setDepth(tagDepth(start.y)),avatar,phase:characterPhase(this.opts.nickname),movingUntil:0,pose:'stand',sitSince:0,lift:0}
     this.fitCamera(this.opts.viewWidth??MIN_VIEW_W)
-    camera.centerOn(spawn.x,H/2).startFollow(sprite,true,this.opts.reducedMotion?1:.12,1)
-    // Stepping out of the store: fade in while the doors slide shut behind the visitor.
+    camera.centerOn(start.x,H/2).startFollow(sprite,true,this.opts.reducedMotion?1:.12,1)
+    // Stepping out of the store or the café: fade in while the doors slide shut behind the visitor.
     if(this.opts.arriving){
       if(!this.opts.reducedMotion)camera.fadeIn(FADE_MS,...FADE_COLOR)
-      this.time.delayedCall(this.opts.reducedMotion?0:450,()=>{if(this.door)slideDoor(this,this.door,'shop-door',false,Boolean(this.opts.reducedMotion))})
+      const [door,prefix]=this.fromCafe?[this.cafeDoor,'cafe-door']:[this.door,'shop-door']
+      this.time.delayedCall(this.opts.reducedMotion?0:450,()=>{if(door)slideDoor(this,door,prefix,false,Boolean(this.opts.reducedMotion))})
     }
     this.doorReadyAt=this.time.now+1200
     if(this.input.keyboard){
@@ -185,7 +219,8 @@ class NeighborhoodScene extends Phaser.Scene{
       texture(`${id}-step1`,art.visitorArt(id,'step1'));texture(`${id}-step2`,art.visitorArt(id,'step2'))
       texture(`${id}-sit`,street.sittingVisitorArt(id));texture(`${id}-sit-blink`,street.sittingVisitorArt(id,true))
     }
-    for(const frame of [0,1,2,3] as const)texture(`shop-door-${frame}`,street.storeDoorArt(frame))
+    for(const frame of [0,1,2,3] as const){texture(`shop-door-${frame}`,street.storeDoorArt(frame));texture(`cafe-door-${frame}`,street.cafeDoorArt(frame))}
+    texture('cafe-sign',street.cafeSignArt());texture('hand-umbrella',handUmbrellaArt());texture('neon-glow',street.glowArt(16,'#ffb347'))
     texture('bench',street.benchArt())
     for(const frame of ['idle','blink','vend'] as const)texture(`vending-${frame}`,street.vendingArt(frame))
     texture('order-board',street.orderBoardArt())
@@ -210,12 +245,19 @@ class NeighborhoodScene extends Phaser.Scene{
     const spark=()=>{if(!this.opts.reducedMotion)tapSparks(this,x,y)}
     const interact=(tx:number,ty:number,kind:string)=>{spark();this.walkTo(tx,ty,()=>this.opts.onInteract(kind))}
     if(Math.abs(x-DOOR.x)<=22&&y>=156&&y<=256){spark();this.walkTo(DOOR.x,DOOR.standY,()=>this.enterStore());return}
+    if(Math.abs(x-CAFE_DOOR.x)<=22&&y>=156&&y<=256){spark();this.goToCafe();return}
+    if(Math.abs(x-CAFE_SIGN.x)<=26&&y>=244&&y<=308){
+      const lines=this.cafeCount?[`${tambays(this.cafeCount)}. Pasok!`,'May tambay dito! Free kape inside.']:CAFE_SIGN_LINES
+      spark();this.noticeAt(CAFE_SIGN.x,CAFE_SIGN.y-36,lines[Math.floor(Math.random()*lines.length)]!,3200,140);return
+    }
+    // Tapping the café front (not the door) walks over to its door.
+    if(CAFE_FRONT.contains(x,y)){spark();this.walkTo(CAFE_DOOR.x,CAFE_DOOR.standY);return}
     if(Math.abs(x-VENDING.x)<=24&&y>=196&&y<=284){interact(VENDING.standX,VENDING.standY,'vending');return}
     if(Math.abs(x-BENCH.x)<=36&&y>=256&&y<=302){spark();this.chooseSeat(x);return}
     if(Math.abs(x-ORDER_BOARD.x)<=28&&y>=252&&y<=306){interact(ORDER_BOARD.standX,ORDER_BOARD.standY,'board');return}
     const lamp=this.lamps.find(lamp=>Math.abs(x-lamp.x)<=14&&y>=lamp.y-50&&y<=lamp.y+50)
     if(lamp){spark();lamp.flareUntil=this.time.now+1400;return}
-    const tree=this.trees.find(({sprite})=>Math.abs(x-sprite.x)<=36&&y>=sprite.y-46&&y<=sprite.y+30)
+    const tree=this.trees.find(({sprite})=>Math.abs(x-sprite.x)<=40&&y>=sprite.y-50&&y<=sprite.y+30)
     if(tree){spark();this.rustle(tree);return}
     const shop=SHOPS.find(shop=>shop.area.contains(x,y))
     if(shop){spark();this.shopSpeak(shop);return}
@@ -306,6 +348,12 @@ class NeighborhoodScene extends Phaser.Scene{
     this.walkTo(DOOR.x,DOOR.standY,()=>this.enterStore())
     if(!this.inputBlocked()&&!this.path.length&&this.afterPath){this.afterPath=undefined;this.enterStore()}
   }
+  // The page's café button, or a tap on the café door: walk over and go in. The café never closes.
+  goToCafe(){
+    const enter=()=>this.opts.onInteract('cafe')
+    this.walkTo(CAFE_DOOR.x,CAFE_DOOR.standY,enter)
+    if(!this.inputBlocked()&&!this.path.length&&this.afterPath){this.afterPath=undefined;enter()}
+  }
   // At the door: in we go, unless the store is closed, when the locked door rattles and the visitor says so.
   private enterStore(){
     if(this.storeOpen){this.opts.onInteract('store');return}
@@ -315,6 +363,11 @@ class NeighborhoodScene extends Phaser.Scene{
     if(!door||this.opts.reducedMotion)return
     this.tweens.killTweensOf(door);door.setX(DOOR.x)
     this.tweens.add({targets:door,x:DOOR.x+PX/2,duration:50,yoyo:true,repeat:3,onComplete:()=>door.setX(DOOR.x)})
+  }
+  setCafeCount(count:number){
+    this.cafeCount=Math.max(0,Math.floor(count))
+    this.cafeCountTag?.setVisible(this.cafeCount>0)
+    if(this.cafeCount&&this.cafeCountTag?.text!==tambays(this.cafeCount))this.cafeCountTag?.setText(tambays(this.cafeCount))
   }
   setStoreOpen(open:boolean){
     this.storeOpen=open
@@ -361,9 +414,30 @@ class NeighborhoodScene extends Phaser.Scene{
     if(bubble instanceof Tag)bubble.setPosition(sprite.x,top-BUBBLE_GAP)
     else bubble?.setPosition(sprite.x,top-BUBBLE_GAP-20)
     setDepthIfChanged(sprite,sprite.y+10);setDepthIfChanged(label,tagDepth(sprite.y))
+    if(this.raining&&!visitor.umbrella)visitor.umbrella=this.sprite(0,0,'hand-umbrella',0).setOrigin(.5,0)
+    const umbrella=visitor.umbrella
+    if(umbrella){
+      if(umbrella.visible!==this.raining)umbrella.setVisible(this.raining)
+      if(this.raining){if(umbrella.x!==sprite.x+3||umbrella.y!==top-30)umbrella.setPosition(sprite.x+3,top-30);setDepthIfChanged(umbrella,sprite.depth+.6);umbrella.setAlpha(sprite.alpha)}
+    }
+  }
+  setRain(on:boolean){
+    if(this.raining===on)return
+    this.raining=on;this.rainFrame=-2;this.rainWash?.setVisible(on)
+    for(const visitor of [this.self,...this.remotes.values()])if(visitor)this.placeTags(visitor)
+  }
+  private updateRain(){
+    const fx=this.rainFx,motion=!this.opts.reducedMotion
+    if(!fx)return
+    const frame=!this.raining?-3:motion?Math.floor(this.time.now/90):-1
+    if(frame===this.rainFrame)return
+    this.rainFrame=frame
+    if(frame===-3){fx.clear();return}
+    drawRain(fx,{x:-SIDE,y:0,width:W+SIDE*2,height:H},250,frame)
   }
   // Lamps glow by evening and pulse very slightly; moths circle the lit heads at night. Redrawn only on a new frame.
   private updateAmbient(){
+    this.updateRain()
     const now=this.time.now,motion=!this.opts.reducedMotion,{lamps:base}=SHADE[this.daylight]
     this.lamps.forEach((lamp,i)=>{
       const flare=now<lamp.flareUntil,on=flare||base>0
@@ -388,6 +462,11 @@ class NeighborhoodScene extends Phaser.Scene{
       const frame=motion&&(now<tree.rustleUntil?Math.floor(now/90)%2:Math.floor((now+tree.sprite.x*7)/1700)%2)?'tree-1':'tree-0'
       if(tree.sprite.texture.key!==frame)tree.sprite.setTexture(frame)
     }
+    // The OPEN sign hums: a slow, slight glow pulse, and now and then a quick dim.
+    if(this.neon){
+      const dim=motion&&now%9000<90,alpha=dim?.55:motion?.85+Math.round(Math.sin(now/700)*2)/20:1
+      if(this.neon.text.alpha!==alpha){this.neon.text.setAlpha(alpha);this.neon.glow.setAlpha(dim?.4:alpha)}
+    }
     if(motion)this.clouds.forEach((cloud,i)=>{const x=Math.round(((now/1000*(2+i%3)+i*330)%(W+SIDE*2+80)-SIDE-40)/PX)*PX;if(cloud.x!==x)cloud.setX(x)})
     const machine=this.vending
     if(machine){
@@ -398,25 +477,27 @@ class NeighborhoodScene extends Phaser.Scene{
       if(machine.x!==VENDING.x+shake)machine.setX(VENDING.x+shake)
     }
   }
-  // Holding up (keys or joystick) against the store door for a moment walks back inside.
+  // Holding up (keys or joystick) against the store or café door for a moment walks in.
   private checkDoorPush(pushY:number,delta:number){
     const sprite=this.self!.sprite
     if(sprite.y>DOOR.triggerY+16)this.doorTriggered=false
-    const pushing=pushY<-.5&&sprite.y<=DOOR.triggerY&&Math.abs(sprite.x-DOOR.x)<=DOOR.halfWidth
-    this.doorPush=pushing?this.doorPush+delta:0
-    if(this.doorPush>=DOOR.pushMs&&!this.doorTriggered&&this.time.now>=this.doorReadyAt){this.doorTriggered=true;this.enterStore()}
+    const at=(x:number)=>pushY<-.5&&sprite.y<=DOOR.triggerY&&Math.abs(sprite.x-x)<=DOOR.halfWidth
+    const door=at(DOOR.x)?'store':at(CAFE_DOOR.x)?'cafe':undefined
+    this.doorPush=door?this.doorPush+delta:0
+    if(door&&this.doorPush>=DOOR.pushMs&&!this.doorTriggered&&this.time.now>=this.doorReadyAt){this.doorTriggered=true;if(door==='store')this.enterStore();else this.opts.onInteract('cafe')}
   }
-  exitScene(){
+  exitScene(target?:SceneId){
     return new Promise<void>(resolve=>{
-      const self=this.self
-      if(!self||!this.door){resolve();return}
+      const self=this.self,exit=target==='cafe'?{door:this.cafeDoor,prefix:'cafe-door'}:{door:this.door,prefix:'shop-door'}
+      if(!self||!exit.door){resolve();return}
+      this.exitDoor={door:exit.door,prefix:exit.prefix}
       this.standUp(false)
       this.exiting={x:self.sprite.x,y:self.sprite.y};this.resetMovement();this.doorTriggered=true
       const instant=Boolean(this.opts.reducedMotion)
-      slideDoor(this,this.door,'shop-door',true,instant,()=>{
+      slideDoor(this,exit.door,exit.prefix,true,instant,()=>{
         if(instant){resolve();return}
         // Step in through the door while the screen fades.
-        this.tweens.add({targets:self.sprite,y:self.sprite.y-16,alpha:0,duration:FADE_MS,onUpdate:()=>{self.label.setPosition(self.sprite.x,self.sprite.y-NAME_TAG_GAP).setAlpha(self.sprite.alpha)}})
+        this.tweens.add({targets:self.sprite,y:self.sprite.y-16,alpha:0,duration:FADE_MS,onUpdate:()=>{self.label.setPosition(self.sprite.x,self.sprite.y-NAME_TAG_GAP).setAlpha(self.sprite.alpha);self.umbrella?.setPosition(self.sprite.x+3,self.sprite.y-self.lift-30).setAlpha(self.sprite.alpha)}})
         this.cameras.main.fade(FADE_MS,...FADE_COLOR,true,(_:unknown,progress:number)=>{if(progress>=1)resolve()})
       })
     })
@@ -424,9 +505,10 @@ class NeighborhoodScene extends Phaser.Scene{
   cancelExit(){
     const from=this.exiting,self=this.self
     this.exiting=undefined;this.doorPush=0;this.doorReadyAt=this.time.now+1200
-    if(from&&self){this.tweens.killTweensOf(self.sprite);self.sprite.setPosition(from.x,from.y).setAlpha(1);self.label.setAlpha(1);this.placeTags(self)}
+    if(from&&self){this.tweens.killTweensOf(self.sprite);self.sprite.setPosition(from.x,from.y).setAlpha(1);self.label.setAlpha(1);self.umbrella?.setAlpha(1);this.placeTags(self)}
     if(this.opts.reducedMotion)this.cameras.main.resetFX();else this.cameras.main.fadeEffect.start(false,FADE_MS,...FADE_COLOR,true)
-    if(this.door)slideDoor(this,this.door,'shop-door',false,Boolean(this.opts.reducedMotion))
+    const exit=this.exitDoor;this.exitDoor=undefined
+    if(exit)slideDoor(this,exit.door,exit.prefix,false,Boolean(this.opts.reducedMotion))
   }
   override update(_:number,delta:number){
     this.updateAmbient()
@@ -466,7 +548,7 @@ class NeighborhoodScene extends Phaser.Scene{
     }
     this.selfId=selfId
     const incoming=new Set(players.filter(p=>p.id!==selfId).map(p=>p.id))
-    for(const [id,p] of this.remotes)if(!incoming.has(id)){p.sprite.destroy();p.label.destroy();p.bubble?.destroy();this.remotes.delete(id)}
+    for(const [id,p] of this.remotes)if(!incoming.has(id)){p.sprite.destroy();p.label.destroy();p.bubble?.destroy();p.umbrella?.destroy();this.remotes.delete(id)}
     for(const p of players){if(p.id===selfId)continue
       let remote=this.remotes.get(p.id)
       if(!remote){
@@ -526,6 +608,6 @@ export function createNeighborhood(el:HTMLElement,opts:Options):NeighborhoodGame
   const active=()=>Boolean(scene.sys?.isActive())
   return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(active())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(active())scene.movePlayer(id,x,y)},
     showBubble:(id,text)=>{if(active())scene.showBubble(id,text)},setReducedMotion:value=>{if(active())scene.setReducedMotion(value)},setControlsEnabled:value=>scene.setControlsEnabled(value),
-    exitScene:()=>active()?scene.exitScene():Promise.resolve(),cancelExit:()=>{if(active())scene.cancelExit()},setViewWidth:width=>scene.setViewWidth(width),
-    setPose:(id,pose,seat)=>{if(active())scene.setPose(id,pose,seat)},setBoard:orders=>{if(active())scene.setBoard(orders)},vend:()=>{if(active())scene.vend()},goInside:()=>{if(active())scene.goInside()},setStoreOpen:open=>{if(active())scene.setStoreOpen(open)}}
+    exitScene:target=>active()?scene.exitScene(target):Promise.resolve(),cancelExit:()=>{if(active())scene.cancelExit()},setViewWidth:width=>scene.setViewWidth(width),
+    setPose:(id,pose,seat)=>{if(active())scene.setPose(id,pose,seat)},setBoard:orders=>{if(active())scene.setBoard(orders)},vend:()=>{if(active())scene.vend()},goInside:()=>{if(active())scene.goInside()},goToCafe:()=>{if(active())scene.goToCafe()},setStoreOpen:open=>{if(active())scene.setStoreOpen(open)},setCafeCount:count=>{if(active())scene.setCafeCount(count)},setRain:on=>{if(active())scene.setRain(on)}}
 }

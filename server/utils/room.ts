@@ -1,7 +1,8 @@
 import { activeVisitor, getVisitor, publicOrder, type OrderRow } from './db'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, AdminChatState } from '../../shared/chat'
-import { benchSeats, scenes, SEAT_REACH, type Pose, type SceneId } from '../../shared/world'
+import { arrivalSpot, sceneLinked, sceneSeats, SEAT_REACH, type Pose, type SceneId } from '../../shared/world'
+import type { CafeAction, DrinkId } from '../../shared/cafe'
 import { isStoreOpen } from './store'
 
 type Connection = {
@@ -16,6 +17,10 @@ type Connection = {
   y: number
   pose: Pose
   seat: number|null
+  // The virtual café drink in hand; only ever held inside Kape & Chits.
+  drink: DrinkId|null
+  lastDrink: number
+  lastAct: number
   lastSceneChange: number
   lastMove: number
   lastChat: number
@@ -30,15 +35,31 @@ const interactions=new Map<number,{lastChat:number;chatWindowStart:number;chatCo
 const serialize = (x: unknown) => JSON.stringify(x)
 let chatEnabled = true
 const chatHistory:ChatMessage[]=[]
+// Visitors who reported each message (by visitor ID, so one report each). Only staff see the counts.
+const chatReports=new Map<string,Set<number>>()
+const reportPace=new Map<number,{windowStart:number;count:number}>()
 export function publishChat(message:Omit<ChatMessage,'messageId'>){
   const entry={...message,messageId:randomUUID()}
   chatHistory.push(entry)
-  if(chatHistory.length>50)chatHistory.splice(0,chatHistory.length-50)
+  if(chatHistory.length>50)for(const old of chatHistory.splice(0,chatHistory.length-50))chatReports.delete(old.messageId)
   broadcast({type:'chat',...entry})
 }
 export function adminChatState():AdminChatState{
   if(pruneExpired())broadcastPresence()
-  return {messages:[...chatHistory],chatEnabled,online:members.size}
+  return {messages:chatHistory.map(message=>{const reports=chatReports.get(message.messageId)?.size;return reports?{...message,reports}:message}),chatEnabled,online:members.size}
+}
+// A visitor flags someone else's chat line for staff. Repeats are answered but never counted twice.
+export function reportChat(p:Connection,messageId:string){
+  const message=chatHistory.find(entry=>entry.messageId===messageId)
+  if(!message||message.role!=='visitor'||message.id===p.id){p.send(serialize({type:'report_rejected',messageId}));return false}
+  const now=Date.now(),pace=reportPace.get(p.visitorId)
+  if(!pace||now-pace.windowStart>60_000)reportPace.set(p.visitorId,{windowStart:now,count:1})
+  else if(++pace.count>10){p.send(serialize({type:'report_rejected',messageId,reason:'slow_down'}));return false}
+  let reporters=chatReports.get(messageId)
+  if(!reporters)chatReports.set(messageId,reporters=new Set())
+  reporters.add(p.visitorId)
+  p.send(serialize({type:'report_ok',messageId}))
+  return true
 }
 export function authorized(p:Connection){return Date.now()<p.expiresAt&&activeVisitor(getVisitor(p.visitorId))}
 function pruneExpired(force=false){
@@ -55,13 +76,16 @@ function pruneExpired(force=false){
 setInterval(()=>{
   if(pruneExpired())broadcastPresence()
   for(const [id,state] of interactions)if(Date.now()-Math.max(state.lastChat,state.chatWindowStart)>60_000)interactions.delete(id)
+  for(const [id,pace] of reportPace)if(Date.now()-pace.windowStart>60_000)reportPace.delete(id)
 },1000).unref()
 export function recordInteraction(p:Connection){interactions.set(p.visitorId,{lastChat:p.lastChat,chatWindowStart:p.chatWindowStart,chatCount:p.chatCount})}
 // Without a scene: everyone connected. Visitors only ever receive the list for the scene they stand in.
 export const playerList = (scene?:SceneId) => [...members.values()].filter(p=>!scene||p.scene===scene)
-  .map(p => ({ id:p.id, nickname:p.nickname, avatar:p.avatar, x:p.x, y:p.y, pose:p.pose, ...(p.seat===null?{}:{seat:p.seat}) }))
+  .map(p => ({ id:p.id, nickname:p.nickname, avatar:p.avatar, x:p.x, y:p.y, pose:p.pose, ...(p.seat===null?{}:{seat:p.seat}), ...(p.drink?{drink:p.drink}:{}) }))
 export const onlineCount = () => members.size
-const presence=(scene:SceneId)=>({type:'players',scene,players:playerList(scene),online:members.size})
+// The street also hears how many are in Kape & Chits (a count only, never who), for the sign by its door.
+const cafeCount=()=>{let count=0;for(const member of members.values())if(member.scene==='cafe')count++;return count}
+const presence=(scene:SceneId)=>({type:'players',scene,players:playerList(scene),online:members.size,...(scene==='outside'?{cafe:cafeCount()}:{})})
 function deliver(data:string,scene?:SceneId){
   for (const member of members.values()) {
     if(scene&&member.scene!==scene)continue
@@ -89,6 +113,8 @@ export function broadcastPresence(){
   }
 }
 export function findMember(id: string) { return members.get(id) }
+// Whether this visitor (any of their connections) is standing in the scene right now.
+export function inScene(visitorId:number,scene:SceneId){for(const member of members.values())if(member.visitorId===visitorId)return member.scene===scene;return false}
 export function joinRoom(p: Connection) {
   // One connected avatar per visitor session; an old tab is replaced on reconnect.
   pruneExpired(true)
@@ -106,11 +132,13 @@ export function leaveRoom(id: string) {
   if (!members.delete(id)) return
   broadcastPresence()
 }
-// Walking through a door: the visitor leaves one scene's presence and appears at the other scene's spawn.
+// Walking through a door: the visitor leaves one scene's presence and appears by the door in the other scene.
+// Only neighbouring places connect (the store and the café each open onto the street).
 // The same request twice is answered again (the client may have missed it); quick repeats are refused.
-// While the store is closed its door is locked: visitors stay on the street.
+// While the store is closed its door is locked: visitors stay on the street. The café never closes.
 export function changeScene(p:Connection,scene:SceneId){
   const now=Date.now()
+  if(scene!==p.scene&&!sceneLinked(p.scene,scene)){p.send(serialize({type:'scene_rejected',scene:p.scene}));return false}
   if(scene==='store'&&!isStoreOpen()){p.send(serialize({type:'scene_rejected',scene:p.scene,reason:'closed'}));return false}
   if(now-p.lastSceneChange<800){p.send(serialize({type:'scene_rejected',scene:p.scene}));return false}
   placeInScene(p,scene,now)
@@ -118,14 +146,16 @@ export function changeScene(p:Connection,scene:SceneId){
   return true
 }
 function placeInScene(p:Connection,scene:SceneId,now:number){
-  p.scene=scene;p.lastSceneChange=now;p.x=scenes[scene].spawn.x;p.y=scenes[scene].spawn.y;p.lastMove=now;p.pose='stand';p.seat=null
+  const spot=arrivalSpot(scene,p.scene)
+  // Seats and drinks stay behind: a visitor always arrives standing, empty-handed.
+  p.scene=scene;p.lastSceneChange=now;p.x=spot.x;p.y=spot.y;p.lastMove=now;p.pose='stand';p.seat=null;p.drink=null
   p.send(serialize({type:'scene_changed',scene,x:p.x,y:p.y,players:playerList(scene),online:members.size}))
 }
-// Sitting is only possible on a free bench seat the visitor is standing at.
+// Sitting is only possible on a free seat in the visitor's own scene that they are standing at.
 export function sitDown(p:Connection,seat:number){
-  const spot=benchSeats[seat]
-  const taken=[...members.values()].some(other=>other.id!==p.id&&other.scene==='outside'&&other.pose==='sit'&&other.seat===seat)
-  if(p.scene!=='outside'||!spot||taken||Math.hypot(p.x-spot.x,p.y-spot.y)>SEAT_REACH){p.send(serialize({type:'sit_rejected',seat}));return false}
+  const spot=sceneSeats[p.scene][seat]
+  const taken=[...members.values()].some(other=>other.id!==p.id&&other.scene===p.scene&&other.pose==='sit'&&other.seat===seat)
+  if(!spot||taken||Math.hypot(p.x-spot.x,p.y-spot.y)>SEAT_REACH){p.send(serialize({type:'sit_rejected',seat}));return false}
   if(p.pose==='sit'&&p.seat===seat)return true
   p.x=spot.x;p.y=spot.y;p.pose='sit';p.seat=seat
   broadcastScene(p.scene,{type:'player_pose',id:p.id,pose:'sit',seat})
@@ -135,6 +165,22 @@ export function standUp(p:Connection){
   if(p.pose==='stand')return
   p.pose='stand';p.seat=null
   broadcastScene(p.scene,{type:'player_pose',id:p.id,pose:'stand'})
+}
+// The barista hands over a free virtual drink; everyone in the café sees the cup. Ordering again swaps it.
+export function takeDrink(p:Connection,drink:DrinkId){
+  const now=Date.now()
+  if(p.scene!=='cafe'||now-p.lastDrink<1500||p.drink===drink)return false
+  p.drink=drink;p.lastDrink=now
+  broadcastScene(p.scene,{type:'player_drink',id:p.id,drink})
+  return true
+}
+// Sipping (with a drink in hand) and relaxing are short animations everyone in the café sees.
+export function playAction(p:Connection,action:CafeAction){
+  const now=Date.now()
+  if(p.scene!=='cafe'||now-p.lastAct<800||(action==='sip'&&!p.drink))return false
+  p.lastAct=now
+  broadcastScene(p.scene,{type:'player_act',id:p.id,action})
+  return true
 }
 export function notifyOrderChanged(order: OrderRow) {
   broadcast({ type:'order_changed', order:publicOrder(order) })
@@ -163,12 +209,14 @@ export function closeStoreRoom(){
 export function reopenStoreRoom(){broadcast({type:'store_status',open:true})}
 export function clearChatHistory(){
   chatHistory.length=0
+  chatReports.clear()
   broadcast({type:'chat_reset'})
 }
 export function resetVisitorRoom(){
   const leaving=[...members.values()]
   members.clear()
   interactions.clear()
+  reportPace.clear()
   mutedVisitorIds.clear()
   for(const member of leaving){
     try{member.send(serialize({type:'choose_avatar'}))}catch{}

@@ -75,8 +75,8 @@ export const CREAM='#fff8ea',LEAF='#5c9a4a',LEAF_DARK='#447f3a',LEAF_LIGHT='#7cb
 // ---------- Characters ----------
 type HeadId=typeof avatarOptions[number]['id']|'menu-guide'|'staff'|'chef'|'fixer'
 function lowestRow(art:PixelArt,x:number){for(let y=art.height-1;y>=0;y--)if(art.get(x,y))return y;return -1}
-// Heads are 20x16 with the shape inside x1..18, y1..14 so the outline fits.
-export function headArt(id:HeadId,blink=false){
+// Heads are 20x16 with the shape inside x1..18, y1..14 so the outline fits. Without a face, it is the back of the head.
+export function headArt(id:HeadId,blink=false,face=true){
   const art=new PixelArt(20,16)
   const option=avatarOptions.find(a=>a.id===id)
   const body=option?hex(option.body):id==='menu-guide'?'#f3cf82':id==='chef'?'#fff3e2':'#fff0da'
@@ -183,6 +183,7 @@ export function headArt(id:HeadId,blink=false){
     if(id==='fixer')art.rect(4,1,12,4,'#f2c84b').rect(2,4,16,2,'#d9a12e').rect(6,2,3,1,'#fbe39a').rect(9,1,2,3,'#e6b53c')
   }
   art.outline(INK)
+  if(!face)return art
   if(blink)art.rect(6,8,1,1,EYE).rect(13,8,1,1,EYE)
   else art.rect(6,7,1,2,EYE).rect(13,7,1,2,EYE)
   // Cheeks only land on the food itself, never floating on the outline of a narrow shape.

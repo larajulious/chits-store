@@ -59,7 +59,7 @@ defineExpose({refresh:()=>load(true)})
     <p class="help-text chat-explanation">Reply as staff to everyone in the store.</p>
     <div ref="feed" class="admin-chat-feed" role="log" tabindex="0" aria-label="Community chat messages" aria-live="polite" aria-relevant="additions text">
       <p v-if="messages.length===0" class="help-text">No messages yet. Say hello to your visitors.</p>
-      <div v-for="entry in messages" :key="entry.messageId" class="admin-chat-line" :class="{'from-staff':entry.role==='staff'}"><div class="chat-sender"><strong>{{ entry.nickname }}</strong><span v-if="entry.role==='staff'" class="staff-tag">STAFF</span><time :datetime="new Date(entry.at).toISOString()">{{ new Date(entry.at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) }}</time></div><p>{{ entry.text }}</p></div>
+      <div v-for="entry in messages" :key="entry.messageId" class="admin-chat-line" :class="{'from-staff':entry.role==='staff'}"><div class="chat-sender"><strong>{{ entry.nickname }}</strong><span v-if="entry.role==='staff'" class="staff-tag">STAFF</span><span v-if="entry.reports" class="report-tag" :title="`Reported by ${entry.reports} ${entry.reports===1?'visitor':'visitors'}. Mute or kick them in Community Moderation.`">⚑ {{ entry.reports }} {{ entry.reports===1?'REPORT':'REPORTS' }}</span><time :datetime="new Date(entry.at).toISOString()">{{ new Date(entry.at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) }}</time></div><p>{{ entry.text }}</p></div>
     </div>
     <p v-if="!connected" class="help-text" role="status">Connecting to chat. Retrying automatically.</p>
     <p v-else-if="!storeOpen" class="help-text" role="status">The store is closed. Open it to chat with visitors.</p>
@@ -84,6 +84,7 @@ defineExpose({refresh:()=>load(true)})
 .admin-chat-line.from-staff{border-color:#91aa6f;background:#e6edce;box-shadow:2px 2px 0 #bdcea2}
 .chat-sender{color:#715236}.chat-sender strong{font-family:Silkscreen,monospace;font-size:9px;font-weight:400}.chat-sender time{color:#715a43}
 .staff-tag{border:1px solid #91aa6f;background:#d3e3b1;color:#3e5939;font:8px/1.5 Silkscreen,monospace}
+.report-tag{padding:3px 5px;border:1px solid #c98a7c;background:#f6d6cf;color:#8e3b2c;font:8px/1.5 Silkscreen,monospace}
 .admin-chat-form .input{border:2px solid #b08a5e;border-radius:0;background:#fffbef;box-shadow:inset 2px 2px 0 #ead9ba;font-family:'Courier New',monospace}
 .admin-chat-form .help-text{color:#755b44}
 .admin-chat .btn{border:2px solid #62412b;border-radius:0;background:#98704b;color:#fff4dd;box-shadow:3px 3px 0 #62412b,inset 2px 2px 0 #b89067;font:10px/1.5 Silkscreen,monospace;transition:none}

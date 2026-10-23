@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import {vendingProducts,type VendingProduct} from '../../shared/world'
 // A just-for-fun drinks machine on the street. Nothing is ordered or charged; products come from shared/world.ts.
+// menuAvailable: false while the store is closed, so there is no menu to point to.
+withDefaults(defineProps<{menuAvailable?:boolean}>(),{menuAvailable:true})
 const emit=defineEmits<{vend:[product:VendingProduct];menu:[]}>()
 const dispensing=ref<VendingProduct|null>(null),served=ref<VendingProduct|null>(null),drop=ref(0)
 let timer:ReturnType<typeof setTimeout>|undefined
@@ -16,7 +18,7 @@ onBeforeUnmount(()=>clearTimeout(timer))
 </script>
 <template>
   <div class="vending-panel">
-    <p class="vending-intro">Pick a cold drink! This one is just for fun. Real meryenda orders are on Today’s Menu.</p>
+    <p class="vending-intro">Pick a cold drink! This one is just for fun.{{ menuAvailable?' Real meryenda orders are on Today’s Menu.':'' }}</p>
     <div class="vending-machine">
       <div class="vending-window" role="group" aria-label="Drinks">
         <button v-for="product in vendingProducts" :key="product.id" type="button" class="vending-slot" :class="{soon:product.soon,active:dispensing?.id===product.id}" :disabled="product.soon||!!dispensing" :aria-label="product.soon?`${product.label}, coming soon`:`Get a ${product.label}`" @click="choose(product)">
@@ -28,7 +30,7 @@ onBeforeUnmount(()=>clearTimeout(timer))
       <div class="vending-tray" aria-hidden="true"><span v-if="shown" :key="drop" class="vending-can dropped" :style="{'--can':shown.can,'--band':shown.band}"/></div>
     </div>
     <p class="vending-status" role="status">{{ dispensing?'Clunk… clunk…':served?`Here’s your ${served.label}! ${lines[served.id]??''}`:'Tap a drink to get it.' }}</p>
-    <button type="button" class="btn small secondary dialog-action" @click="emit('menu')">See today’s menu</button>
+    <button v-if="menuAvailable" type="button" class="btn small secondary dialog-action" @click="emit('menu')">See today’s menu</button>
   </div>
 </template>
 <style scoped>

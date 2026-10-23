@@ -1,16 +1,16 @@
 import Phaser from 'phaser'
-import type {Pose} from '../shared/world'
+import type {Pose,SceneId} from '../shared/world'
 import type {OrderStatus} from '../shared/order-status'
 import {reactionOptions} from '../shared/reactions'
 import * as art from './pixelArt'
 
 // Shared by the store and the neighborhood scenes, so both look and behave like one game.
-export type Player = { id:string;nickname:string;avatar:string;x:number;y:number;pose?:Pose;seat?:number }
+export type Player = { id:string;nickname:string;avatar:string;x:number;y:number;pose?:Pose;seat?:number;drink?:string }
 export type BoardOrder = { id:number;number:string;name:string|null;status:OrderStatus }
 // What every scene offers the page: movement, presence, bubbles, and the door transition.
 export type WorldGame = {game:Phaser.Game;setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;showBubble:(id:string,text:string)=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void;
-  // The door opens and the screen fades; resolves when the visitor can be moved to the other scene.
-  exitScene:()=>Promise<void>;
+  // The door to `target` opens and the screen fades; resolves when the visitor can be moved to the other scene.
+  exitScene:(target?:SceneId)=>Promise<void>;
   // The move was refused or timed out: close the door and fade back in.
   cancelExit:()=>void;
   // The stage changed shape: show this many world units across (see viewWidthFor).
@@ -117,6 +117,23 @@ export class Tag extends Phaser.GameObjects.Container{
   }
 }
 
+// Rain for the café jukebox's rainy mood, over the café deck and the street: slanted two-pixel streaks over the area,
+// and short splashes on the ground below groundY. Positions come from the frame number alone (a still frame with
+// reduced motion), so the same frame always draws the same rain.
+export function drawRain(g:Phaser.GameObjects.Graphics,area:{x:number;y:number;width:number;height:number},groundY:number,frame:number){
+  g.clear()
+  const step=Math.max(0,frame),snap=(value:number)=>Math.round(value/PX)*PX,count=Math.round(area.width*area.height/3600)
+  for(let i=0;i<count;i++){
+    const x=snap(area.x+((i*67-step*4)%area.width+area.width)%area.width),y=snap(area.y+(i*113+step*30)%area.height)
+    g.fillStyle(y<groundY?0xf2f8fc:0xd6e6f0,y<groundY?.75:.6).fillRect(x,y,PX,PX*3).fillRect(x-PX,y+PX*3,PX,PX*3)
+  }
+  for(let i=0;i<count/6;i++){
+    const age=(step+i*3)%6,cycle=Math.floor((step+i*3)/6)
+    if(age>=3)continue
+    const x=snap(area.x+(i*89+cycle*53)%area.width),y=snap(groundY+12+(i*47+cycle*31)%Math.max(PX,area.y+area.height-groundY-16))
+    g.fillStyle(0xe6f2f8,.7-age*.2).fillRect(x-age*PX,y,PX*(1+age*2),PX).fillRect(x-PX,y-PX,PX,PX)
+  }
+}
 // Four small pixel sparks: confirms a tap without moving the camera or adding lasting effects.
 export function tapSparks(scene:Phaser.Scene,x:number,y:number){
   const spark=scene.add.graphics({x:Math.round(x/PX)*PX,y:Math.round(y/PX)*PX}).setDepth(950)

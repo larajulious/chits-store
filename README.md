@@ -29,6 +29,17 @@ A cozy multiplayer bakery prototype, built in one **Nuxt + Phaser + SQLite** pro
 - On desktop, the dashboard shows order creation and a filtered order queue alongside customer chat. Preparing, Ready, Out for Delivery and Delivered counts reflect the most recent 100 orders; The queue opens on Preparing and offers Preparing, Ready, Out for Delivery and Delivered filters. Use Mark delivered on an Out for Delivery order, confirm receipt, then find completed orders under Delivered. Smaller screens use a stacked layout.
 - Original `/enter/:token` links redirect to the public entrance for compatibility.
 
+## Chits Neighborhood (outdoor street)
+
+- The door at the bottom of the store (**GO OUTSIDE**) leads to a small street: the Chits Store front, a bench outside a closed sari-sari store, a vending machine, street lamps, mango trees and a second closed shop (Hugot Burger). Tap the door or hold down against it to step out; outside, tap the store door, hold up against it, or use **Go inside**.
+- Each visitor stands in one scene. Movement, emotes, sitting and presence reach only visitors in the same scene; the header still counts everyone online. Community chat stays one shared channel, and the chat log tags messages sent from the other scene (INSIDE/OUTSIDE).
+- The bench seats two and sitting is shared with other visitors. The vending machine is just for fun (no orders or payments); add drinks in `shared/world.ts`. The closed shops show a "Coming soon" bubble.
+- Outside, a sidewalk chalkboard shows the newest Ready order **number** (never staff-entered names) and how many orders are preparing; the Orders, Menu and Chat → Order inbox actions work from either scene.
+- Both scenes follow the Manila clock (checked every minute): day (6–17), dusk (5–6 and 17–19) and night. Outside, the sky changes and the lamps and shop windows light up after dark; inside, the side windows and the view through the front doors match. Preview with `/store?time=day|dusk|night`.
+- A refresh keeps the visitor in the scene they were in (per browser tab); entering from the welcome page or leaving always starts the next visit inside.
+- The street is a separate lazily loaded chunk and Phaser game; only one scene exists at a time.
+- The game fills the full width of any screen. The view is always 580 world units tall and as wide as the screen's shape (360 on phones, up to 1800 on ultra-wide screens). Inside, the room stays centred between the shop's decorated wooden walls; outside, the whole street shows on wide screens, carrying on past both ends to neighbouring houses and fiesta barricades. Resizing or rotating reshapes the running scene without a reload.
+
 ## Setup on macOS
 
 Requires Node.js 24 LTS, npm, C++ build tools for `better-sqlite3`.
@@ -69,6 +80,7 @@ URLs:
 8. In admin, close the store and confirm the warning. Visitors inside should return automatically to the closed welcome screen, where entry is disabled. Reopen the store and check that entry works again.
 9. Open the same visitor session in two tabs. The older tab should return to the welcome screen automatically while the new tab stays connected.
 10. In admin, add today's menu items and prices, edit one and remove another. In the store, tap the walking **MENU • TAP** character or the Menu action; confirm the prices update and a fresh menu appears after the Manila date changes.
+11. Walk out through the GO OUTSIDE door, then back in. A second visitor inside should not see you while you are outside, while the header count includes you. Sit on the bench and confirm the other visitor sees it once they step outside. Refresh while outside: you should return to the street.
 
 ## Running on a VPS
 
@@ -110,10 +122,13 @@ If entry still fails, identify the error in those logs before changing configura
 - `app/pages/index.vue` — public avatar selection and animated storefront
 - `app/pages/store.vue` — multiplayer game, public board and chat
 - `app/pages/admin/index.vue` — staff dashboard and optional moderation
-- `game/createGame.ts` — temporary Phaser scene; art assets not final
+- `game/createGame.ts` — the store's Phaser scene; art assets not final
+- `game/neighborhood.ts`, `game/neighborhoodArt.ts` — the outdoor street scene and its art (lazy-loaded)
+- `game/common.ts` — speech tags, path finding, door transitions and other helpers both scenes share
+- `shared/world.ts` — scene floors and spawns (validated by the server), bench seats, vending products
 - `server/api/visitors/join.post.ts` — public visitor session creation
 - `server/api/orders/board.get.ts` — public-safe order status listing
-- `server/routes/ws.ts` — room movement, chat, presence
+- `server/routes/ws.ts` — room movement, chat, presence, scene changes and sitting
 - `server/utils/room.ts` — one-process room and moderation state
 - `server/utils/db.ts` — SQLite orders and visitors tables
 - `server/utils/auth.ts` — signed visitor/admin cookies and admin login

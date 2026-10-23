@@ -1,18 +1,19 @@
 import Phaser from 'phaser'
 import { avatarOptions, type AvatarId } from '../shared/avatars'
 import { reactionOptions } from '../shared/reactions'
-import type {OrderStatus} from '../shared/order-status'
 import {mascotFloorPoint,residentCats,storeObstacles,type CatMood,type CatName,type CatSnapshot,type CatTaps} from '../shared/store-mascot'
+import {scenes} from '../shared/world'
 import {createLocalMascot} from './localMascot'
 import * as art from './pixelArt'
+import {BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,NAME_TAG_GAP,PX,TAG_FONT,Tag,MIN_VIEW_W,characterPhase,createReactionTextures,currentDaylight,findPath,isHalloweenSeason,setDepthIfChanged,swingDoor,tagDepth,tapSparks,visitorFrame,type BoardOrder,type Daylight,type Player,type WorldGame} from './common'
 
 export type Avatar = AvatarId
-export type Player = { id:string;nickname:string;avatar:string;x:number;y:number }
-export type BoardOrder = { id:number;number:string;name:string|null;status:OrderStatus }
-export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean;petCat:()=> 'petted'|'too_far'|'busy';showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void;setJukebox:(state:JukeboxScene)=>void;setMenuItems:(items:string[]|null)=>void;setCatTaps:(taps:CatTaps)=>void }
+export type {BoardOrder,Player} from './common'
+export type StoreGame = WorldGame & { tossYarn:()=>boolean;petCat:()=> 'petted'|'too_far'|'busy';showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setJukebox:(state:JukeboxScene)=>void;setMenuItems:(items:string[]|null)=>void;setCatTaps:(taps:CatTaps)=>void }
 // playing: the shared jukebox has a song on. audible: this visitor is listening to it.
 export type JukeboxScene={playing:boolean;audible:boolean}
-type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onCatMeow:(name:CatName)=>void;onCatTap?:(name:CatName)=>void;catEnabled?:boolean;guideEnabled?:boolean;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number}
+// arriving: the visitor has just walked in from the street, so the door closes behind them.
+type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onCatMeow:(name:CatName)=>void;onCatTap?:(name:CatName)=>void;catEnabled?:boolean;guideEnabled?:boolean;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;daylight?:Daylight;viewWidth?:number}
 // joinedDance: set once the character starts dancing on the floor, cleared when they step off it.
 type Character = {sprite:Phaser.GameObjects.Image;avatar:string;phase:number;joinedDance?:boolean}
 type ShopCat = {name:CatName;roams:boolean;sprite:Phaser.GameObjects.Image;label:Tag;skin:string;counter?:Tag;counterUntil:number;joinedDance?:boolean}
@@ -22,15 +23,10 @@ const CAT_TAP_WORDS:Record<CatName,string>={Miming:'meow',Onay:'purr'}
 const CAT_SKINS:Record<CatName,string>={Miming:'cat',Onay:'onay'}
 const CAT_POSES=[['idle','stand'],['walk','walk'],['sit','sit'],['rest','lie'],['sleep','sleep'],['stretch','stretch'],['notice','notice'],['play','play']] as const
 type VisitorCharacter = Character & {label:Tag;movingUntil:number;bubble?:Tag|Phaser.GameObjects.Image}
-function characterPhase(id:string){let hash=0;for(const char of id)hash=(hash*31+char.charCodeAt(0))>>>0;return hash%6000}
-// Phaser queues a full display-list sort on every setDepth call, even if the value is unchanged.
-function setDepthIfChanged(object:{depth:number;setDepth:(value:number)=>unknown},depth:number){if(object.depth!==depth)object.setDepth(depth)}
-// The world stays 360x580 with the floor at y 260..542: the server validates moves against it.
-const W=360,H=580,CELL=20,PX=art.ART_SCALE
-const FONT='Silkscreen, monospace'
-const NAME_TAG_GAP=28,BUBBLE_GAP=54,TAG_FONT=10,TAG_PAD_Y=4
-// Name tags draw above every character and piece of furniture (still ordered by y), below chat bubbles.
-const tagDepth=(y:number)=>600+y/10
+// The world stays 360x580 with the floor at y 260..542: the server validates moves against it (shared/world.ts).
+const {width:W,height:H}=scenes.store,CELL=20
+// The front doorway opens onto the street. Holding down against it for a moment also walks out.
+const DOOR={x:180,standY:540,halfWidth:46,pushMs:220,triggerY:536}
 const obstructions=storeObstacles.map(box=>new Phaser.Geom.Rectangle(box.x,box.y,box.w,box.h))
 const feedbackArea=obstructions[0]!
 // The sign advertising custom and mobile app development stands between the jukebox and the feedback board;
@@ -42,7 +38,7 @@ const adSignArea=obstructions[2]!
 const JUKEBOX={x:328,y:227,standX:320,standY:300,depth:256}
 // What the walking menu guide says now and then. Item lines use real names from today's menu;
 // before the menu is posted the guide only says it's on the way.
-const GUIDE_LINES=["Have you checked today's menu?",'Meryenda time! Tap me for the menu.',"Hungry? Today's menu is ready!",'Psst... tap me to see the menu!','Gutom ka na? Check the menu!','Something sweet is on the menu today!','Fresh meryenda today. Come see!','Psst... hop on the dance floor!','Need an app built? Tap the sign!']
+const GUIDE_LINES=["Have you checked today's menu?",'Meryenda time! Tap me for the menu.',"Hungry? Today's menu is ready!",'Psst... tap me to see the menu!','Gutom ka na? Check the menu!','Something sweet is on the menu today!','Fresh meryenda today. Come see!','Psst... hop on the dance floor!','Need an app built? Tap the sign!','Step outside and say hi to the neighborhood!','Thirsty? Try the vending machine outside!']
 const GUIDE_ITEM_LINES=['Try the {item} today!',"{item} is on today's menu!",'Have you tried our {item}?','Craving {item}? Tap me!','Fresh {item}, just for you!']
 const HALLOWEEN_GUIDE_LINES=['Happy Halloween! Treat yourself to meryenda.','Trick or treat? Tap me for the menu!','Psst... try tapping the pumpkins!']
 const HALLOWEEN_LINES={carved:['Boo!','Hehehe!','Boo! Did I scare you?'],plain:['Trick or treat!','Here, have a treat!'],bat:['Squeak!','Eek!']}
@@ -57,11 +53,6 @@ function guideLine(items:string[]|null,previous:string){
     if(line!==previous)return line
   }
   return random(GUIDE_LINES)
-}
-// Halloween decorations stay up through Undas (Nov 1-2), on the store's Manila calendar.
-function isHalloweenSeason(now=new Date()){
-  const [month,day]=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',month:'numeric',day:'numeric'}).format(now).split('/').map(Number)
-  return month===10||(month===11&&day!<=2)
 }
 // Two performers dance on a light-up floor in the open corner left of the entrance. Each step of
 // the routine is [pose, flipped]; the second dancer is flipped throughout, so the pair mirror each other.
@@ -94,64 +85,7 @@ function cheerLine(previous:string,music:boolean,crowd:boolean){
 const menuGuideStops=[{x:170,y:440},{x:160,y:300},{x:200,y:280},{x:280,y:420},{x:220,y:530},{x:200,y:400},{x:230,y:540}]
 function bounded(x:number,y:number){return Math.max(20,Math.min(340,x))>=20&&x>=20&&x<=340&&y>=260&&y<=542&&!obstructions.some(r=>r.contains(x,y))}
 function closestPoint(x:number,y:number){const a=Math.max(20,Math.min(340,x)),b=Math.max(260,Math.min(542,y));if(bounded(a,b))return {x:a,y:b};return {x:180,y:500}}
-function key(x:number,y:number){return `${x}|${y}`}
-function pathFind(start:Phaser.Math.Vector2,target:Phaser.Math.Vector2){
-  const toGrid=(p:Phaser.Math.Vector2)=>({x:Math.round(p.x/CELL),y:Math.round(p.y/CELL)})
-  const startGrid=toGrid(start),targetGrid=toGrid(target)
-  const allowed=(x:number,y:number)=>bounded(x*CELL,y*CELL)
-  if(!allowed(targetGrid.x,targetGrid.y))return []
-  const q=[startGrid],seen=new Set([key(startGrid.x,startGrid.y)]),prev=new Map<string,string>()
-  const dirs=[[1,0],[-1,0],[0,1],[0,-1]] as const
-  for(let i=0;i<q.length;i++){
-    const c=q[i]!;if(c.x===targetGrid.x&&c.y===targetGrid.y)break
-    for(const [dx,dy] of dirs){const nx=c.x+dx,ny=c.y+dy,k=key(nx,ny)
-      if(!seen.has(k)&&allowed(nx,ny)){seen.add(k);prev.set(k,key(c.x,c.y));q.push({x:nx,y:ny})}}
-  }
-  const end=key(targetGrid.x,targetGrid.y)
-  if(!seen.has(end))return []
-  const seq:Phaser.Math.Vector2[]=[];let current=end
-  while(current!==key(startGrid.x,startGrid.y)){
-    const [x,y]=current.split('|').map(Number) as [number,number];seq.push(new Phaser.Math.Vector2(x*CELL,y*CELL));current=prev.get(current)!}
-  return seq.reverse()
-}
-
-// Ink bounds of rendered text, measured once per font and line so padding hugs the letters, not the line box.
-let measureContext:CanvasRenderingContext2D|null|undefined
-function inkExtent(font:string,line:string){
-  measureContext??=document.createElement('canvas').getContext('2d')
-  if(!measureContext)return undefined
-  measureContext.font=font
-  const metrics=measureContext.measureText(line||' ')
-  return {above:metrics.actualBoundingBoxAscent,below:metrics.actualBoundingBoxDescent}
-}
-// A cream speech-tag with a small tail and a thin brown edge. (x,y) is the tail tip, so tags sit just above a sprite.
-class Tag extends Phaser.GameObjects.Container{
-  private bg:Phaser.GameObjects.Graphics
-  private label:Phaser.GameObjects.Text
-  constructor(scene:Phaser.Scene,x:number,y:number,text:string,style:{size?:number;color?:string;wrap?:number;resolution:number}){
-    super(scene,x,y)
-    this.bg=new Phaser.GameObjects.Graphics(scene)
-    this.label=new Phaser.GameObjects.Text(scene,0,0,text,{fontFamily:FONT,fontSize:`${style.size??TAG_FONT}px`,color:style.color??'#24160d',align:'center',resolution:style.resolution,
-      wordWrap:style.wrap?{width:style.wrap,useAdvancedWrap:true}:undefined}).setOrigin(.5,0)
-    this.add([this.bg,this.label]);scene.add.existing(this);this.redraw()
-  }
-  get text(){return this.label.text}
-  setText(value:string){this.label.setText(value);this.redraw();return this}
-  private redraw(){
-    // Center the letters themselves: equal space above the tallest glyph and below the baseline.
-    const lines=this.label.getWrappedText(this.label.text),metrics=this.label.style.getTextMetrics(),font=`${this.label.style.fontSize} ${FONT}`
-    const first=inkExtent(font,lines[0]??''),last=inkExtent(font,lines[lines.length-1]??'')
-    const inkTop=first?metrics.ascent-first.above:0
-    const inkBottom=last?(lines.length-1)*(metrics.fontSize+this.label.lineSpacing)+metrics.ascent+last.below:this.label.height
-    const w=Math.ceil((this.label.width+10)/PX)*PX,h=Math.ceil((inkBottom-inkTop+TAG_PAD_Y*2)/PX)*PX,left=-Math.round(w/2/PX)*PX,top=-h-4
-    this.label.setPosition(left+w/2,top+(h-(inkBottom-inkTop))/2-inkTop)
-    const shape=(grow:number)=>this.bg.fillRect(left+PX-grow,top-grow,w-PX*2+grow*2,h+grow*2).fillRect(left-grow,top+PX-grow,w+grow*2,h-PX*2+grow*2)
-      .fillRect(-PX*2-grow,-4,PX*2+grow*2,PX+grow).fillRect(-PX-grow,-2,PX+grow*2,PX+grow)
-    this.bg.clear().fillStyle(0x6b4630,.35).fillRect(left+PX,top+PX+1,w,h)
-    this.bg.fillStyle(0x8a6446);shape(1)
-    this.bg.fillStyle(0xfffcf4);shape(0)
-  }
-}
+function pathFind(start:Phaser.Math.Vector2,target:Phaser.Math.Vector2){return findPath(start,target,bounded,CELL)}
 
 class StoreScene extends Phaser.Scene {
   private opts:Options
@@ -214,6 +148,17 @@ class StoreScene extends Phaser.Scene {
   private cheerTurn=0
   private lastCheer=''
   private draggingYarn?:{pointerId:number;lastX:number;lastY:number;lastAt:number;previousX:number;previousY:number;previousAt:number}
+  private door?:Phaser.GameObjects.Image
+  private doorLight?:Phaser.GameObjects.Graphics
+  // How long the visitor has pushed against the doorway; doorTriggered stops repeat requests until they step back.
+  private doorPush=0
+  private doorTriggered=false
+  private doorReadyAt=0
+  // Set while walking out through the door: movement and network moves pause.
+  private exiting?:{x:number;y:number}
+  // Follows the Manila clock, like the street: the side windows and the view through the door change with it.
+  private daylight:Daylight='day'
+  private windowSky?:Phaser.GameObjects.Graphics
   constructor(opts:Options){super('Store');this.opts=opts;this.zoom=opts.zoom??1;if(opts.catEnabled!==false)this.mascot=createLocalMascot()}
   private texture(name:string,pixels:art.PixelArt){if(!this.textures.exists(name))this.textures.addCanvas(name,pixels.toCanvas())}
   private sprite(x:number,y:number,name:string,depth:number){return this.add.image(x,y,name).setScale(PX).setDepth(depth)}
@@ -226,6 +171,14 @@ class StoreScene extends Phaser.Scene {
     this.createTextures()
     // Room shell: walls, awning, sign board, kitchen nook, chalkboard frame and tiled floor.
     this.add.image(0,0,'room').setOrigin(0).setScale(PX).setDepth(0)
+    // On screens wider than the room, the shop's wooden walls carry on either side, with a soft shadow at the room's edges.
+    // Each side is 720 world units: enough for the widest view (MAX_VIEW_W).
+    for(const x of [-720,W])this.add.image(x,0,'store-backdrop').setOrigin(0).setScale(PX).setDepth(0)
+    this.add.graphics().setDepth(0).fillStyle(0x2b1d16,.35).fillRect(-PX*2,28,PX*2,520).fillRect(W,28,PX*2,520)
+    this.daylight=this.opts.daylight??currentDaylight()
+    this.windowSky=this.add.graphics().setDepth(.5)
+    this.drawWindowSky()
+    this.time.addEvent({delay:60_000,loop:true,callback:()=>{const next=this.opts.daylight??currentDaylight();if(next!==this.daylight){this.daylight=next;this.drawWindowSky()}}})
     const sign=this.text(207,38,'CHITS STORE',16,'#fff3d6',2).setStroke('#fff3d6',1).setShadow(0,2,'#4b301f',0,false,true)
     this.sprite(sign.x+sign.width/2+16,36,'sparkle',2)
     this.sprite(sign.x-sign.width/2-26,48,'head-palitaw',2)
@@ -276,7 +229,18 @@ class StoreScene extends Phaser.Scene {
     this.dancers=DANCERS.map(({id,x,y,mirror})=>({sprite:this.sprite(x,y,`dancer-${id}-up`,y+10).setFlipX(mirror),id,y,mirror,twirlUntil:0}))
     this.nextCheerAt=this.time.now+3000+Math.random()*3000
     this.sprite(180,564,'entrance',1000)
-    this.text(180,559,'ENTRANCE',8,'#5e3d27',1001)
+    this.text(180,559,'GO OUTSIDE',8,'#5e3d27',1001)
+    // Light from the street spills onto the mat while the doors are open.
+    this.doorLight=this.add.graphics().setDepth(1001).setAlpha(0)
+    this.door=this.sprite(DOOR.x,576,`${this.doorPrefix}-${this.opts.arriving?3:0}`,1002)
+    this.drawDoorLight()
+    // Walking in from the street: fade in while the doors slide shut behind the visitor.
+    if(this.opts.arriving){
+      this.doorLight.setAlpha(1)
+      if(!this.opts.reducedMotion)this.cameras.main.fadeIn(FADE_MS,...FADE_COLOR)
+      this.time.delayedCall(this.opts.reducedMotion?0:450,()=>this.closeDoor())
+    }
+    this.doorReadyAt=this.time.now+1200
     // A few Halloween touches: pumpkins either side of the door and two bats by the sign.
     if(halloween){
       pumpkin(floor(104,536,'pumpkin-glow'),true);pumpkin(floor(256,536,'pumpkin'),false)
@@ -320,6 +284,8 @@ class StoreScene extends Phaser.Scene {
     this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>{
       if(this.inputBlocked())return
       const x=pointer.worldX,y=pointer.worldY
+      // Taps on the walls beside the room just walk toward that side.
+      if(x<0||x>W){const p=closestPoint(x,y);this.tapFeedback(p.x,p.y);this.walkTo(p.x,p.y);return}
       // The guide can cross the yarn's tile; keep its menu hit target reliable there.
       if(this.menuGuide&&Math.abs(x-this.menuGuide.sprite.x)<24&&Math.abs(y-this.menuGuide.sprite.y)<30){
         this.menuGuidePath=[];this.menuGuidePauseUntil=this.time.now+3500;this.menuGuide.sprite.setTint(0xffecc2);this.clearGuideBubble();this.tapFeedback(x,y);this.opts.onInteract('menu');return
@@ -350,7 +316,7 @@ class StoreScene extends Phaser.Scene {
       if(y<256&&x>=60&&x<=304){interact(177,273,'cashier');return}
       if(feedbackArea.contains(x,y)){interact(260,500,'feedback');return}
       if(adSignArea.contains(x,y)){interact(AD_SIGN.standX,AD_SIGN.standY,'services');return}
-      if(y>=548&&x>=126&&x<=234){interact(180,540,'leave');return}
+      if(y>=548&&x>=126&&x<=234){interact(DOOR.x,DOOR.standY,'outside');return}
       const p=closestPoint(x,y);this.tapFeedback(p.x,p.y);this.walkTo(p.x,p.y)
     })
     this.input.on('pointermove',(pointer:Phaser.Input.Pointer)=>this.dragYarn(pointer))
@@ -358,7 +324,7 @@ class StoreScene extends Phaser.Scene {
     this.input.on('pointerupoutside',(pointer:Phaser.Input.Pointer)=>this.releaseYarn(pointer))
   }
   private createTextures(){
-    this.texture('room',art.roomArt())
+    this.texture('room',art.roomArt());this.texture('store-backdrop',art.storeBackdropArt())
     for(const option of avatarOptions)this.createVisitorTextures(option.id)
     if(this.opts.guideEnabled!==false)this.createVisitorTextures('menu-guide')
     this.texture('chef',art.chefArt());this.texture('chef-blink',art.chefArt(true))
@@ -370,6 +336,7 @@ class StoreScene extends Phaser.Scene {
     for(const frame of ['up','down','rest'] as const)this.texture(`fixer-${frame}`,art.fixerArt(frame))
     this.texture('toolbox',art.toolboxArt());this.texture('cone',art.coneArt());this.texture('repair-tile',art.repairTileArt());this.texture('old-tile',art.oldTileArt())
     this.texture('feedback-board',art.feedbackBoardArt());this.texture('entrance',art.entranceArt())
+    for(const time of ['day','dusk','night'] as const)for(const frame of [0,1,2,3] as const)this.texture(`store-door-${time}-${frame}`,art.insideDoorArt(frame,time))
     this.texture('ad-sign',art.adSignArt());this.texture('ad-sign-ping',art.adSignArt(true))
     this.texture('jukebox-idle',art.jukeboxArt('idle'));for(const frame of [0,1,2,3] as const)this.texture(`jukebox-${frame}`,art.jukeboxArt(frame))
     this.texture('music-note',art.musicNoteArt())
@@ -380,12 +347,7 @@ class StoreScene extends Phaser.Scene {
       this.texture('bat-up',art.batArt('up'));this.texture('bat-down',art.batArt('down'))
       this.texture('ghost',art.ghostArt());this.texture('candy',art.candyArt())
     }
-    for(const reaction of reactionOptions){
-      const pixels=new art.PixelArt(20,20)
-      pixels.rect(0,1,20,18,'#674731').rect(1,0,18,20,'#674731').rect(1,1,18,18,'#fff3da')
-      for(const [x,y,width,height,color] of reaction.pixels)pixels.rect(2+x,2+y,width,height,`#${color.toString(16).padStart(6,'0')}`)
-      this.texture(`reaction-${reaction.id}`,pixels)
-    }
+    createReactionTextures(this)
     if(this.mascot){
       for(const name of Object.keys(CAT_SKINS) as CatName[])for(const [frame,pose] of CAT_POSES)this.texture(`${CAT_SKINS[name]}-${frame}`,art.catArt(pose,art.CAT_COATS[name]))
       this.texture('yarn-ball',art.yarnArt());this.texture('yarn-ball-roll',art.yarnArt(true))
@@ -397,15 +359,7 @@ class StoreScene extends Phaser.Scene {
     for(const pose of DANCE_POSES)this.texture(`${id}-dance-${pose}`,art.dancerArt(id,pose))
   }
   // Four small pixel sparks: confirms a tap without moving the camera or adding lasting effects.
-  private tapFeedback(x:number,y:number){
-    if(this.opts.reducedMotion)return
-    const spark=this.add.graphics({x:Math.round(x/PX)*PX,y:Math.round(y/PX)*PX}).setDepth(950)
-    const progress={value:0}
-    this.tweens.add({targets:progress,value:1,duration:260,onUpdate:()=>{
-      const d=Math.round(2+progress.value*4)*PX/2
-      spark.clear().fillStyle(0xfff6dc,1-progress.value).fillRect(-d-PX,-PX/2,PX,PX).fillRect(d,-PX/2,PX,PX).fillRect(-PX/2,-d-PX,PX,PX).fillRect(-PX/2,d,PX,PX)
-    },onComplete:()=>spark.destroy()})
-  }
+  private tapFeedback(x:number,y:number){if(!this.opts.reducedMotion)tapSparks(this,x,y)}
   setBoard(orders:BoardOrder[]){
     // "number · name", shortening the staff-entered name until the line fits on the chalkboard.
     const write=(text:Phaser.GameObjects.Text,order:BoardOrder|undefined,width:number)=>{
@@ -573,6 +527,12 @@ class StoreScene extends Phaser.Scene {
     this.opts.controlsEnabled=value;this.resetMovement();if(value)this.menuGuide?.sprite.clearTint();if(this.input?.keyboard)this.input.keyboard.enabled=value
   }
   setReducedMotion(value:boolean){this.opts.reducedMotion=value;this.cookingFrame=-2}
+  // The room stays centred however wide the view is.
+  setViewWidth(width:number){
+    if(!this.sys?.isActive())return
+    this.scale.setGameSize(width*this.zoom,H*this.zoom)
+    this.cameras.main.setSize(width*this.zoom,H*this.zoom).centerOn(W/2,H/2)
+  }
   // Frame swaps and whole-pixel lifts only: pixel art is never rotated or squashed.
   private animateCharacter(character:Character,moving:boolean){
     const {sprite,avatar,phase}=character
@@ -589,9 +549,7 @@ class StoreScene extends Phaser.Scene {
       const [pose,flipped]=this.danceStep()
       texture=`${avatar}-dance-${pose}`;flip=flipped;lift=!this.opts.reducedMotion&&pose!=='side'?PX:0
     }else if(!this.opts.reducedMotion){
-      const time=this.time.now+phase
-      if(moving){const step=Math.floor(time/130)%4;lift=step%2?PX:0;if(step===1)texture=`${avatar}-step1`;if(step===3)texture=`${avatar}-step2`}
-      else{lift=Math.floor(time/900)%2?PX/2:0;if(time%(3800+phase%1800)<130)texture=`${avatar}-blink`}
+      ;({texture,lift}=visitorFrame(avatar,phase,this.time.now,moving))
       if(!this.textures.exists(texture))texture=avatar
     }
     if(sprite.texture.key!==texture)sprite.setTexture(texture)
@@ -841,7 +799,7 @@ class StoreScene extends Phaser.Scene {
     for(const character of this.remotes.values())this.animateCharacter(character,this.time.now<character.movingUntil)
     this.moveMenuGuide(delta)
     if(!this.self)return
-    if(this.inputBlocked()){this.resetMovement();this.animateCharacter(this.self,false);return}
+    if(this.exiting||this.inputBlocked()){this.resetMovement();this.doorPush=0;this.animateCharacter(this.self,Boolean(this.exiting));return}
     const sprite=this.self.sprite
     const previousX=sprite.x,previousY=sprite.y
     let vx=this.direction.x,vy=this.direction.y
@@ -849,6 +807,7 @@ class StoreScene extends Phaser.Scene {
       const k=this.keys;vx+=(k.A?.isDown||k.LEFT?.isDown?-1:0)+(k.D?.isDown||k.RIGHT?.isDown?1:0)
       vy+=(k.W?.isDown||k.UP?.isDown?-1:0)+(k.S?.isDown||k.DOWN?.isDown?1:0)
     }
+    this.checkDoorPush(vy,delta)
     if(!vx&&!vy&&this.path.length){
       const p=this.path[0]!,diff=new Phaser.Math.Vector2(p.x-sprite.x,p.y-sprite.y)
       if(diff.length()<4){sprite.setPosition(p.x,p.y);this.path.shift();if(!this.path.length){const action=this.afterPath;this.afterPath=undefined;action?.()}}else{diff.normalize();vx=diff.x;vy=diff.y}
@@ -865,6 +824,64 @@ class StoreScene extends Phaser.Scene {
     if(this.time.now-this.lastMove>90&&Math.hypot(sprite.x-this.lastX,sprite.y-this.lastY)>1){
       this.lastMove=this.time.now;this.lastX=sprite.x;this.lastY=sprite.y;this.opts.onMove(Math.round(sprite.x),Math.round(sprite.y))
     }
+  }
+  // Holding down (keys or joystick) against the doorway for a moment walks out onto the street.
+  private checkDoorPush(pushY:number,delta:number){
+    const sprite=this.self!.sprite
+    if(sprite.y<DOOR.triggerY-16)this.doorTriggered=false
+    const pushing=pushY>.5&&sprite.y>=DOOR.triggerY&&Math.abs(sprite.x-DOOR.x)<=DOOR.halfWidth
+    this.doorPush=pushing?this.doorPush+delta:0
+    if(this.doorPush>=DOOR.pushMs&&!this.doorTriggered&&this.time.now>=this.doorReadyAt){this.doorTriggered=true;this.opts.onInteract('outside')}
+  }
+  private get doorPrefix(){return `store-door-${this.daylight}`}
+  // Daylight, sunset or lamplight from the street, matching the door art.
+  private drawDoorLight(){
+    const color={day:0xfff3c4,dusk:0xf6c28f,night:0xffd98a}[this.daylight],strength=this.daylight==='night'?.6:1
+    this.doorLight?.clear().fillStyle(color,.45*strength).fillRect(132,566,96,6).fillStyle(color,.25*strength).fillRect(142,560,76,6)
+  }
+  // The side windows show the sky outside: clear by day, sunset at dusk, dark with a few stars at night.
+  private drawWindowSky(){
+    const sky=this.windowSky
+    if(!sky)return
+    sky.clear()
+    if(this.daylight!=='day'){
+      const night=this.daylight==='night'
+      for(const pane of art.SIDE_WINDOW_GLASS){
+        sky.fillStyle(night?0x28324f:0xe59a83).fillRect(pane.x*PX,pane.y*PX,pane.w*PX,pane.h*PX)
+        if(!night&&pane.y<70)sky.fillStyle(0x8a74b0).fillRect(pane.x*PX,pane.y*PX,pane.w*PX,14*PX)
+      }
+      // The garden below the windows darkens too.
+      for(const x of [0,175])sky.fillStyle(night?0x2f4a3e:0x6d8a5a,.75).fillRect(x*PX,96*PX,5*PX,17*PX)
+      if(night)for(const [x,y] of [[1,45],[3,58],[2,84],[176,50],[178,63],[177,88]] as const)sky.fillStyle(0xfff3d6).fillRect(x*PX,y*PX,PX,PX)
+    }
+    this.drawDoorLight()
+    if(this.door)this.door.setTexture(this.door.texture.key.replace(/^store-door-\w+-/,`${this.doorPrefix}-`))
+  }
+  private closeDoor(){
+    if(this.door)swingDoor(this,this.door,this.doorPrefix,false,Boolean(this.opts.reducedMotion))
+    if(this.doorLight)this.tweens.add({targets:this.doorLight,alpha:0,duration:this.opts.reducedMotion?0:240})
+  }
+  exitScene(){
+    return new Promise<void>(resolve=>{
+      const self=this.self
+      if(!self||!this.door){resolve();return}
+      this.exiting={x:self.sprite.x,y:self.sprite.y};this.resetMovement();this.doorTriggered=true
+      this.tweens.killTweensOf(this.doorLight!);this.doorLight?.setAlpha(1)
+      const instant=Boolean(this.opts.reducedMotion)
+      swingDoor(this,this.door,this.doorPrefix,true,instant,()=>{
+        if(instant){resolve();return}
+        // Step out through the doorway while the screen fades.
+        this.tweens.add({targets:self.sprite,y:self.sprite.y+24,alpha:0,duration:FADE_MS,onUpdate:()=>{self.label.setPosition(self.sprite.x,self.sprite.y-NAME_TAG_GAP).setAlpha(self.sprite.alpha)}})
+        this.cameras.main.fade(FADE_MS,...FADE_COLOR,true,(_:unknown,progress:number)=>{if(progress>=1)resolve()})
+      })
+    })
+  }
+  cancelExit(){
+    const from=this.exiting,self=this.self
+    this.exiting=undefined;this.doorPush=0;this.doorReadyAt=this.time.now+1200
+    if(from&&self){this.tweens.killTweensOf(self.sprite);self.sprite.setPosition(from.x,from.y).setAlpha(1);self.label.setPosition(from.x,from.y-NAME_TAG_GAP).setAlpha(1)}
+    if(this.opts.reducedMotion)this.cameras.main.resetFX();else this.cameras.main.fadeEffect.start(false,FADE_MS,...FADE_COLOR,true)
+    this.closeDoor()
   }
   setPlayers(players:Player[],selfId:string){
     if(selfId!==this.selfId&&this.self){
@@ -938,8 +955,8 @@ export function createGame(el:HTMLElement,opts:Options):StoreGame{
   // Render at a whole multiple of the world size close to the device's pixels, then let the
   // browser scale the canvas the last small step. Sprites stay crisp without blurry upscaling.
   const zoom=Math.max(1,Math.min(4,Math.round(opts.zoom??1)))
-  const scene=new StoreScene({...opts,zoom})
-  const game=new Phaser.Game({type:Phaser.AUTO,parent:el,width:W*zoom,height:H*zoom,backgroundColor:'#6e4a31',pixelArt:true,
-    scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_HORIZONTALLY,width:W*zoom,height:H*zoom},scene:[scene],render:{antialias:false}})
-  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(scene.sys?.isActive())scene.movePlayer(id,x,y)},tossYarn:()=>scene.sys?.isActive()?scene.tossYarn():false,petCat:()=>scene.sys?.isActive()?scene.petCat():'busy',showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value),setJukebox:state=>scene.setJukebox(state),setMenuItems:items=>scene.setMenuItems(items),setCatTaps:taps=>scene.setCatTaps(taps)}
+  const scene=new StoreScene({...opts,zoom}),viewW=opts.viewWidth??MIN_VIEW_W
+  const game=new Phaser.Game({type:Phaser.AUTO,parent:el,width:viewW*zoom,height:H*zoom,backgroundColor:'#6e4a31',pixelArt:true,
+    scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_HORIZONTALLY,width:viewW*zoom,height:H*zoom},scene:[scene],render:{antialias:false}})
+  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(scene.sys?.isActive())scene.movePlayer(id,x,y)},tossYarn:()=>scene.sys?.isActive()?scene.tossYarn():false,petCat:()=>scene.sys?.isActive()?scene.petCat():'busy',showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value),exitScene:()=>scene.sys?.isActive()?scene.exitScene():Promise.resolve(),cancelExit:()=>{if(scene.sys?.isActive())scene.cancelExit()},setViewWidth:width=>scene.setViewWidth(width),setJukebox:state=>scene.setJukebox(state),setMenuItems:items=>scene.setMenuItems(items),setCatTaps:taps=>scene.setCatTaps(taps)}
 }

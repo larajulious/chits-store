@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AvatarId } from '../../shared/avatars'
+import { clearVisitScene } from '../utils/visitScene'
 const avatar = ref<AvatarId>('mochi')
 const saving = ref(false)
 const error = ref('')
@@ -22,6 +23,8 @@ async function enter() {
   saving.value = true; error.value = ''
   try {
     await $fetch('/api/visitors/join', { method:'POST', body:{ avatar:avatar.value } })
+    // Every visit starts inside the store, even if this tab was last out on the street.
+    clearVisitScene()
     await navigateTo('/store')
   } catch (e:any) {
     error.value = e?.data?.statusMessage || 'Could not enter right now. Please try again.'

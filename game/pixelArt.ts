@@ -68,9 +68,9 @@ export class PixelArt{
 }
 
 const hex=(value:number)=>`#${value.toString(16).padStart(6,'0')}`
-const INK='#3d2a1e',EYE='#2b1d16',BLUSH='#f3a09c',MOUTH='#7a3b30'
-const WOOD_LIGHT='#c99460',WOOD='#a96f45',WOOD_DARK='#7a4f31',WOOD_DEEP='#5e3d27'
-const CREAM='#fff8ea',LEAF='#5c9a4a',LEAF_DARK='#447f3a',LEAF_LIGHT='#7cb662'
+export const INK='#3d2a1e',EYE='#2b1d16',BLUSH='#f3a09c',MOUTH='#7a3b30'
+export const WOOD_LIGHT='#c99460',WOOD='#a96f45',WOOD_DARK='#7a4f31',WOOD_DEEP='#5e3d27'
+export const CREAM='#fff8ea',LEAF='#5c9a4a',LEAF_DARK='#447f3a',LEAF_LIGHT='#7cb662'
 
 // ---------- Characters ----------
 type HeadId=typeof avatarOptions[number]['id']|'menu-guide'|'staff'|'chef'|'fixer'
@@ -434,6 +434,19 @@ export function entranceArt(){
   art.box(6,0,48,12,'#f7e3bd','#8a6446').rect(7,1,46,1,'#fff3d9').rect(7,10,46,1,'#e3c697')
   return art
 }
+// Glass-panelled sliding doors across the foot of the doorway. Frames 0..3 slide the two leaves apart
+// (they disappear into the wall) to show the street outside, lit for the time of day.
+const DOOR_VIEW={day:{glass:'#b9e0ef',shine:'#d8f0f7',light:'#fff3c4',ground:'#e3d6c0'},dusk:{glass:'#e59a83',shine:'#f6c28f',light:'#f6c28f',ground:'#d6bfae'},night:{glass:'#28324f',shine:'#33405e',light:'#ffd98a',ground:'#a49c97'}}
+export function insideDoorArt(frame:0|1|2|3,time:keyof typeof DOOR_VIEW='day'){
+  const art=new PixelArt(54,4),offset=[0,9,18,27][frame]!,view=DOOR_VIEW[time]
+  art.rect(0,0,54,2,view.light).rect(0,2,54,2,view.ground)
+  const leaf=(x:number,handle:number)=>{
+    art.rect(x,0,27,4,WOOD).rect(x,0,27,1,WOOD_LIGHT).rect(x,3,27,1,WOOD_DARK).rect(x+3,1,21,2,view.glass).rect(x+3,1,6,1,view.shine)
+    art.set(x+handle,2,'#e9b84f')
+  }
+  leaf(-offset,25);leaf(27+offset,1)
+  return art
+}
 
 // ---------- Jukebox ----------
 // An arched wooden cabinet with a light tube and a record behind glass. Frames 0..3 chase the
@@ -499,6 +512,8 @@ export function sparkleArt(){return new PixelArt(7,7).grid(0,0,['...c...','...c.
 
 // ---------- The room shell (walls, awning, sign, kitchen nook, chalkboard frame, floor) ----------
 export const ROOM={width:180,height:290,floorTop:101,frontWall:274}
+// The glass of the two side windows (art pixels), which the store scene tints for dusk and night.
+export const SIDE_WINDOW_GLASS=[{x:0,y:41,w:5,h:35},{x:0,y:77,w:5,h:19},{x:175,y:41,w:5,h:35},{x:175,y:77,w:5,h:19}]
 export function roomArt(){
   const art=new PixelArt(ROOM.width,ROOM.height)
   art.rect(0,0,180,290,'#f3e0bf')
@@ -546,6 +561,49 @@ export function roomArt(){
   // Front wall with the doorway
   art.rect(0,274,180,16,'#b29a80').rect(0,274,180,1,'#8e7760').rect(0,275,180,1,'#c7b197').rect(0,286,180,4,'#9a836b')
   for(let y=274;y<290;y++)for(let x=62;x<118;x++)art.set(x,y,x%10===0||y%10===0?'#e2c49c':'#efd5ae')
+  return art
+}
+
+// The shop's wooden walls either side of the room, seen on screens wider than the room. Drawn once and used
+// on both sides: the awning stripes and the low front wall continue straight across from the room, and the
+// decorations sit near both edges (where the room is) so either side looks furnished.
+export function storeBackdropArt(){
+  const art=new PixelArt(360,290)
+  for(let x=0;x<360;x++)art.rect(x,14,1,254,Math.floor(x/12)%2?'#7b5236':'#83583a')
+  for(let x=0;x<360;x+=12){
+    art.rect(x,14,1,254,WOOD_DEEP).set(x+3,22,'#c9a06c').set(x+8,260,'#c9a06c')
+    const n=(x*37)%150;art.rect(x+4+(x%5),60+n,1,16,'#714a30').rect(x+8,120+(n%90),1,10,'#714a30')
+  }
+  art.rect(0,14,360,2,'#4b301f')
+  // Awning, exactly as along the top of the room.
+  art.rect(0,0,360,3,'#6b4630').rect(0,3,360,1,'#83573a')
+  for(let i=0;i<36;i++){
+    const x=i*10,color=i%2?'#8e5c3c':'#f6dfb4'
+    art.rect(x,4,10,7,color).rect(x+1,11,8,1,color).rect(x+2,12,6,1,color).rect(x,4,10,1,i%2?'#a26c48':'#fff0d2')
+    art.set(x,11,'#6b4630').set(x+1,12,'#6b4630').rect(x+2,13,6,1,'#6b4630').set(x+8,12,'#6b4630').set(x+9,11,'#6b4630')
+  }
+  // Warm string lights sagging between the nails.
+  const bulbs=['#ffd45e','#fff1cf','#f3a09c','#ffd45e','#a9ec8f']
+  for(let x=0;x<360;x++){
+    const span=x%60,y=Math.round(24+Math.sin(span/60*Math.PI)*8)
+    art.set(x,y,'#4b301f')
+    if(span%10===5)art.rect(x-1,y+1,3,3,bulbs[Math.floor(x/10)%bulbs.length]!).set(x,y+1,'#ffffff')
+  }
+  // Kakanin portraits in wooden frames, a shelf of jars and tall plants, near both edges.
+  for(const [x,id] of [[318,'palitaw'],[268,'cupcake'],[218,'puto'],[12,'bibingka'],[62,'sapin-sapin'],[112,'boba']] as const){
+    art.box(x,92,30,26,WOOD_LIGHT,INK).rect(x+2,94,26,22,'#f6e2bc').stamp(headArt(id),x+5,97)
+  }
+  for(const x of [252,40]){
+    art.rect(x,160,64,3,WOOD_LIGHT).rect(x,163,64,1,WOOD_DARK).rect(x+6,164,2,4,WOOD_DARK).rect(x+56,164,2,4,WOOD_DARK)
+    ;['#d98b4b','#7fae5e','#c9a14a','#d9785b','#a8c66c','#e8c690'].forEach((fill,i)=>{const jx=x+4+i*10;art.box(jx,150,7,10,'#f4e3c0','#8a6a4a').rect(jx,149,7,1,'#b5764a').rect(jx+1,153,5,6,fill)})
+  }
+  for(const x of [334,10]){
+    art.stroke(x+8,250,x+8,196,2,LEAF).stroke(x+8,246,x-2,212,1.8,LEAF_DARK).stroke(x+8,246,x+18,208,1.8,LEAF_DARK).stroke(x+8,240,x+2,200,1.4,LEAF_LIGHT).stroke(x+8,236,x+15,198,1.4,LEAF_LIGHT)
+    art.rect(x+1,246,14,20,'#c4744a').rect(x,244,16,3,'#d98a5c').rect(x+12,248,2,18,'#a85f3a')
+  }
+  // Skirting board, then the room's low front wall.
+  art.rect(0,266,360,8,WOOD_DEEP).rect(0,266,360,1,'#94643f')
+  art.rect(0,274,360,16,'#b29a80').rect(0,274,360,1,'#8e7760').rect(0,275,360,1,'#c7b197').rect(0,286,360,4,'#9a836b')
   return art
 }
 

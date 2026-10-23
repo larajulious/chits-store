@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { orderStatusLabels,orderNextStatus,type OrderStatus } from '../../../shared/order-status'
 type Order = { id:number; number:string; name:string|null; status:OrderStatus; createdAt:number }
-type RoomState = { chatEnabled:boolean; members:{id:string;visitorId:number;nickname:string;muted:boolean}[] }
+type RoomState = { chatEnabled:boolean; members:{id:string;visitorId:number;nickname:string;scene?:string;muted:boolean}[] }
 type StoreStatus = {open:boolean}
 const loggedIn=ref(false), checking=ref(true), busy=ref(false), password=ref(''), error=ref('')
 const orders=ref<Order[]>([]), room=ref<RoomState>({chatEnabled:true,members:[]})
@@ -163,7 +163,7 @@ async function onDataReset(options:string[]){
             <AdminChat ref="chatManager" class="workspace-chat" :store-open="storeOpen" @session-expired="loggedIn=false"/>
             <AdminFeedback ref="feedbackManager" @session-expired="loggedIn=false"/>
             <AdminJukebox @session-expired="loggedIn=false"/>
-            <details class="card moderation-panel"><summary>Community Moderation<span>Manage visitors</span></summary><div class="moderation-content"><div class="moderation-toggle"><span>Public chat: <strong>{{ room.chatEnabled?'Enabled':'Disabled' }}</strong></span><button type="button" class="btn small secondary" @click="moderate('toggle_chat',undefined,!room.chatEnabled)">{{ room.chatEnabled?'Disable':'Enable' }}</button></div><button type="button" class="btn small secondary" :disabled="refreshing" @click="reload">Refresh visitors</button><p v-if="room.members.length===0" class="help-text">Nobody is online.</p><div v-for="visitor in room.members" :key="visitor.id" class="moderation-member"><strong>{{ visitor.nickname }}</strong><div><button type="button" class="btn small secondary" @click="moderate('mute',visitor.id)">{{ visitor.muted?'Unmute':'Mute' }}</button><button type="button" class="btn small secondary" @click="moderate('kick',visitor.id)">Kick</button></div></div><p class="privacy">Mute and kick controls are temporary and reset on restart.</p></div></details>
+            <details class="card moderation-panel"><summary>Community Moderation<span>Manage visitors</span></summary><div class="moderation-content"><div class="moderation-toggle"><span>Public chat: <strong>{{ room.chatEnabled?'Enabled':'Disabled' }}</strong></span><button type="button" class="btn small secondary" @click="moderate('toggle_chat',undefined,!room.chatEnabled)">{{ room.chatEnabled?'Disable':'Enable' }}</button></div><button type="button" class="btn small secondary" :disabled="refreshing" @click="reload">Refresh visitors</button><p v-if="room.members.length===0" class="help-text">Nobody is online.</p><div v-for="visitor in room.members" :key="visitor.id" class="moderation-member"><strong>{{ visitor.nickname }}<small v-if="visitor.scene==='outside'" class="muted"> · outside</small></strong><div><button type="button" class="btn small secondary" @click="moderate('mute',visitor.id)">{{ visitor.muted?'Unmute':'Mute' }}</button><button type="button" class="btn small secondary" @click="moderate('kick',visitor.id)">Kick</button></div></div><p class="privacy">Mute and kick controls are temporary and reset on restart.</p></div></details>
           </aside>
         </div>
         <dialog ref="createOrderDialog" class="delivery-confirmation create-order-modal" aria-labelledby="create-order-heading" @close="orderName='';createOrderError=''" @cancel="busy&&$event.preventDefault()">

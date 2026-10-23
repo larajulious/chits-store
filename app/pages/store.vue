@@ -9,6 +9,8 @@ import {playChatSound} from '../utils/chatSound'
 import type {JukeboxMyVote,JukeboxState} from '../../shared/jukebox'
 import type {CatName,CatTaps} from '../../shared/store-mascot'
 import {canSetVolume,createJukeboxPlayer,readJukeboxPrefs,saveJukeboxPrefs,type JukeboxListenStatus,type JukeboxPlayer} from '../utils/jukeboxPlayer'
+import {isScene,scenes,type Pose,type SceneId} from '../../shared/world'
+import {clearVisitScene,readVisitScene,saveVisitScene} from '../utils/visitScene'
 const route=useRoute()
 const featureConfig=useRuntimeConfig().public
 // Runtime flags can disable a feature for everyone; query switches isolate one browser for profiling.
@@ -36,7 +38,17 @@ const hasCurrentMenu=computed(()=>Boolean(menu.value.version&&menu.value.date===
 // Item names the walking menu guide may mention; null while today's menu is unknown or has just changed.
 const guideMenuItems=ref<string[]|null>(null)
 const visitorAvatar=computed(()=>isAvatar(me.value?.avatar)?me.value.avatar:'mochi')
-const online=computed(()=>players.value.length)
+// scene: what this tab shows. serverScene: where the server has the visitor; the two differ only while walking through a door.
+const scene=ref<SceneId>(readVisitScene()),serverScene=ref<SceneId>(scene.value),transitioning=ref(false)
+// players only lists the visitor's own scene; the header counts everyone in the store and on the street.
+const onlineTotal=ref<number|null>(null)
+const online=computed(()=>onlineTotal.value??players.value.length)
+// Mid-transition the old scene keeps the list it had, so the street's visitors never flash up inside.
+let transitionPlayers:Player[]=[]
+const scenePlayers=computed(()=>serverScene.value===scene.value?players.value:transitionPlayers)
+let sceneWait:((ok:boolean)=>void)|undefined,sceneReadyTimer:ReturnType<typeof setTimeout>|undefined
+// /store?time=night previews the street's lighting; otherwise it follows the Manila clock.
+const daylight=computed(()=>['day','dusk','night'].includes(String(route.query.time))?route.query.time as 'day'|'dusk'|'night':undefined)
 const overlay=ref(''), message=ref(''), chat=ref<ChatMessage[]>([]), unreadChat=ref(0), notice=ref(''), connected=ref(false), returningHome=ref(false), chatEnabled=ref(true)
 const jukebox=ref<JukeboxState|null>(null),jukeboxVote=ref<JukeboxMyVote>(null),jukeboxPendingVote=ref(''),jukeboxMessage=ref(''),jukeboxClock=ref(Date.now())
 // Store-wide tap totals for Miming and Onay, sent by the server on connect and after taps.
@@ -47,7 +59,7 @@ const musicListening=computed(()=>musicOn.value&&!['off','needs_gesture'].includ
 const jukeboxScene=computed(()=>({playing:Boolean(jukebox.value?.enabled&&jukebox.value.nowPlaying),audible:musicStatus.value==='playing'}))
 let musicPlayer:JukeboxPlayer|undefined,pingSentAt=0
 let jukeboxClockTimer:ReturnType<typeof setInterval>|undefined,jukeboxVoteTimeout:ReturnType<typeof setTimeout>|undefined
-const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean|undefined}|null>(null)
+const game=ref<{showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean|undefined;exitScene:()=>Promise<void>;cancelExit:()=>void;setPose:(id:string,pose:Pose,seat?:number)=>void;vend:()=>void;goInside:()=>void}|null>(null)
 const leaveDialog=ref<{open:()=>void;close:()=>void}|null>(null),leaving=ref(false)
 const visitThanks=useState<boolean>('visit-thanks',()=>false)
 const feedbackBox=ref<{refresh:()=>Promise<void>}|null>(null)
@@ -71,7 +83,7 @@ onMounted(async()=>{
   try { me.value=await $fetch<Me>('/api/me');if(alive)setupMusic();void loadMenu();await Promise.all([loadBoard(),loadOrderInbox()]);if(alive){connect();boardRefresh=setInterval(()=>void loadBoard(),30_000);inboxTimer=setInterval(()=>void pollOrderInbox(),3000)} }
   catch { void returnHome() }
 })
-onBeforeUnmount(()=>{alive=false;document.removeEventListener('visibilitychange',onVisibilityChanged);stopMusic();clearInterval(jukeboxClockTimer);clearTimeout(jukeboxVoteTimeout);clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearInterval(inboxTimer);clearTimeout(menuDayTimer);socket?.close()})
+onBeforeUnmount(()=>{alive=false;sceneWait?.(false);clearTimeout(sceneReadyTimer);document.removeEventListener('visibilitychange',onVisibilityChanged);stopMusic();clearInterval(jukeboxClockTimer);clearTimeout(jukeboxVoteTimeout);clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearInterval(inboxTimer);clearTimeout(menuDayTimer);socket?.close()})
 function setupMusic(){
   const prefs=readJukeboxPrefs()
   musicOn.value=prefs.on;musicVolume.value=prefs.volume;musicVolumeAdjustable.value=canSetVolume()
@@ -217,6 +229,7 @@ function onVisibilityChanged(){
 async function returnHome(){
   if(!alive||returningHome.value)return
   returningHome.value=true
+  clearVisitScene();sceneWait?.(false)
   stopMusic()
   clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearInterval(inboxTimer);clearTimeout(menuDayTimer)
   const current=socket;socket=null;current?.close()
@@ -225,7 +238,8 @@ async function returnHome(){
 }
 function connect(){
   if(!alive||returningHome.value)return
-  const current=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`)
+  // Reconnects and refreshes rejoin the scene this tab is showing.
+  const current=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws?scene=${scene.value}`)
   socket=current
   current.onopen=()=>{clearInterval(heartbeat);ping();heartbeat=setInterval(ping,20_000)}
   current.onmessage=async evt=>{
@@ -233,20 +247,35 @@ function connect(){
     let data:any; try{data=JSON.parse(evt.data)}catch{return}
     if(data.type==='welcome'){
       connected.value=true;selfId.value=data.selfId;players.value=data.players||[];chatEnabled.value=data.chatEnabled!==false
+      onlineTotal.value=typeof data.online==='number'?data.online:null
+      serverScene.value=isScene(data.scene)?data.scene:'store'
+      if(serverScene.value!==scene.value)enterScene(serverScene.value)
       if(hasWelcomed){menuStale=true;menuEpoch++;if(!document.hidden)void loadMenu(true)}
       hasWelcomed=true
       await loadBoard()
     }
-    if(data.type==='players')players.value=data.players||[]
+    // A list for the scene the visitor just left can still arrive while walking through a door.
+    if(data.type==='players'&&(!isScene(data.scene)||data.scene===serverScene.value)){players.value=data.players||[];if(typeof data.online==='number')onlineTotal.value=data.online}
+    if(data.type==='scene_changed'&&isScene(data.scene)){
+      serverScene.value=data.scene;players.value=data.players||[];if(typeof data.online==='number')onlineTotal.value=data.online
+      if(sceneWait)sceneWait(true);else if(data.scene!==scene.value)enterScene(data.scene)
+    }
+    if(data.type==='scene_rejected'){if(isScene(data.scene))serverScene.value=data.scene;sceneWait?.(false)}
     if(data.type==='player_moved'){
       const found=players.value.find(p=>p.id===data.id)
       if(found&&found.id!==selfId.value&&Number.isFinite(data.x)&&Number.isFinite(data.y)){
-        Object.assign(toRaw(found),{x:data.x,y:data.y})
+        Object.assign(toRaw(found),{x:data.x,y:data.y,pose:'stand',seat:undefined})
         game.value?.movePlayer(data.id,data.x,data.y)
       }
     }
+    // The visitor's own sitting is shown at once; only a refusal (sit_rejected) stands them back up.
+    if(data.type==='player_pose'&&data.id!==selfId.value){
+      const found=players.value.find(p=>p.id===data.id),pose:Pose=data.pose==='sit'?'sit':'stand',seat=pose==='sit'&&Number.isInteger(data.seat)?data.seat:undefined
+      if(found){Object.assign(toRaw(found),{pose,seat});game.value?.setPose(data.id,pose,seat)}
+    }
+    if(data.type==='sit_rejected')game.value?.setPose(selfId.value,'stand')
     if(data.type==='chat'){
-      const entry:ChatMessage={messageId:data.messageId,id:data.id,nickname:data.nickname,text:data.text,at:data.at,role:data.role==='staff'?'staff':'visitor'}
+      const entry:ChatMessage={messageId:data.messageId,id:data.id,nickname:data.nickname,text:data.text,at:data.at,role:data.role==='staff'?'staff':'visitor',scene:isScene(data.scene)?data.scene:undefined}
       chat.value=[...chat.value.slice(-49),entry]
       if(entry.id!==selfId.value){
         if(overlay.value!=='chat'||chatTab.value!=='community'||document.hidden)unreadChat.value=Math.min(99,unreadChat.value+1)
@@ -283,7 +312,9 @@ function connect(){
   }
   current.onclose=async evt=>{
     if(socket!==current||returningHome.value)return
-    connected.value=false;players.value=[];clearInterval(heartbeat)
+    connected.value=false;players.value=[];onlineTotal.value=null;clearInterval(heartbeat)
+    // A door request lost with the connection: stay in this scene; the reconnect rejoins it.
+    sceneWait?.(false)
     if(evt.code===1008){void returnHome();return}
     if(!alive)return
     try{me.value=await $fetch<Me>('/api/me')}catch(e:any){if(e?.response?.status===401||e?.response?.status===503){void returnHome();return}}
@@ -301,17 +332,47 @@ async function askAboutServices(){
   openChat();await nextTick()
   const input=chatInput.value;if(input){input.focus();input.setSelectionRange(input.value.length,input.value.length)}
 }
-function interact(kind:string){if(kind==='leave'){leaveDialog.value?.open();return}overlay.value=kind;if(kind==='menu')void loadMenu()}
+function interact(kind:string){
+  if(isScene(kind)){void changeScene(kind);return}
+  if(kind==='leave'){leaveDialog.value?.open();return}
+  overlay.value=kind;if(kind==='menu')void loadMenu()
+}
+// Through a door: the door opens and the screen fades while the server moves the visitor, then the
+// other scene is built and fades in. One request at a time; a refusal or timeout closes the door again.
+async function changeScene(target:SceneId){
+  if(transitioning.value||target===scene.value||returningHome.value||leaving.value)return
+  if(!connected.value){notice.value='Reconnecting… please try the door again in a moment.';return}
+  transitioning.value=true;transitionPlayers=players.value
+  const confirmed=new Promise<boolean>(resolve=>{
+    const finish=(ok:boolean)=>{clearTimeout(timer);if(sceneWait===finish)sceneWait=undefined;resolve(ok)}
+    const timer=setTimeout(()=>finish(false),5000)
+    sceneWait=finish
+  })
+  send({type:'scene',scene:target})
+  // A hidden tab pauses the game loop, so the door animation never holds up the move for long.
+  const opened=Promise.race([game.value?.exitScene()??Promise.resolve(),new Promise(resolve=>setTimeout(resolve,1500))])
+  const [ok]=await Promise.all([confirmed,opened])
+  if(!alive||returningHome.value)return
+  if(!ok){transitionPlayers=[];game.value?.cancelExit();transitioning.value=false;if(connected.value)notice.value='The door is stuck. Please try again.';return}
+  enterScene(target)
+}
+function enterScene(target:SceneId){
+  transitionPlayers=[];scene.value=target;saveVisitScene(target)
+  transitioning.value=true
+  clearTimeout(sceneReadyTimer);sceneReadyTimer=setTimeout(()=>{transitioning.value=false},8000)
+}
+function onSceneReady(){clearTimeout(sceneReadyTimer);transitioning.value=false}
+function sendPose(pose:{pose:Pose;seat?:number}){send(pose.pose==='sit'?{type:'sit',seat:pose.seat}:{type:'stand'})}
 async function leave(){
   if(leaving.value)return
-  leaving.value=true;visitThanks.value=true
+  leaving.value=true;visitThanks.value=true;clearVisitScene()
   try{await navigateTo('/')}
   catch{visitThanks.value=false;leaving.value=false;leaveDialog.value?.close();notice.value='Could not leave right now. Please try again.'}
 }
 </script>
 <template><main class="game-shell structured-store">
   <header class="structured-store-top">
-    <div class="visitor-identity"><span class="visitor-portrait"><PixelSprite :name="`head-${visitorAvatar}`" :scale="2"/></span><div class="visitor-copy"><span>CHITS STORE</span><strong :title="me?.nickname">{{ me?.nickname || 'Guest' }}</strong></div></div>
+    <div class="visitor-identity"><span class="visitor-portrait"><PixelSprite :name="`head-${visitorAvatar}`" :scale="2"/></span><div class="visitor-copy"><span>{{ scene==='outside'?'NEIGHBORHOOD':'CHITS STORE' }}</span><strong :title="me?.nickname">{{ me?.nickname || 'Guest' }}</strong></div></div>
     <div class="visit-status">
       <span class="connection-pill" :class="{ready:connected}" role="status"><span class="connection-dot" aria-hidden="true"/>{{ connected?`${online} online`:'Connecting' }}</span>
       <button type="button" class="music-toggle" data-music-control :aria-label="musicListening?'Mute jukebox music':'Turn on jukebox music'" :aria-pressed="musicListening" :title="jukebox?.enabled&&jukebox.nowPlaying?`Now playing: ${jukebox.nowPlaying.track.title}`:undefined" :disabled="!me||returningHome" @click="toggleMusic"><StoreGlyph name="note"/>{{ musicListening?'Music on':'Music off' }}</button>
@@ -320,7 +381,7 @@ async function leave(){
   <template v-if="me&&!returningHome">
     <div class="game-stage">
       <aside v-if="notice" class="structured-notice" role="status"><strong>{{ notice }}</strong><button type="button" aria-label="Dismiss notice" @click="notice=''">✕</button></aside>
-      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving" :jukebox="jukeboxScene" :menu-items="guideMenuItems" :cat-taps="catTaps" @move="p=>send({type:'move',x:p.x,y:p.y})" @cat-tap="(name:CatName)=>send({type:'cat_tap',name})" @interact="interact"/></ClientOnly>
+      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :scene="scene" :daylight="daylight" :nickname="me.nickname" :avatar="me.avatar" :players="scenePlayers" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving&&!transitioning" :jukebox="jukeboxScene" :menu-items="guideMenuItems" :cat-taps="catTaps" @move="p=>{if(serverScene===scene)send({type:'move',x:p.x,y:p.y})}" @cat-tap="(name:CatName)=>send({type:'cat_tap',name})" @interact="interact" @pose="sendPose" @ready="onSceneReady"/></ClientOnly>
     </div>
     <button v-if="featuredOrder" type="button" class="order-inbox-shortcut" :class="{'has-reply':privateUnread>0}" :aria-label="privateUnread?`Order inbox, ${privateUnread} unread staff ${privateUnread===1?'reply':'replies'}. Open order ${featuredOrder.number}`:`Open order inbox for order ${featuredOrder.number}`" @click="openOrderInbox(featuredOrder.id)"><span class="order-inbox-shortcut-icon"><StoreGlyph name="chat"/><span v-if="privateUnread" class="order-inbox-shortcut-count" aria-hidden="true">{{ privateUnread>9?'9+':privateUnread }}</span></span><span class="order-inbox-shortcut-copy"><strong>{{ privateUnread?'New reply from staff':'Your order inbox' }}</strong><small>Order #{{ featuredOrder.number }}{{ featuredOrder.name?` · ${featuredOrder.name}`:'' }} · {{ orderStatusLabels[featuredOrder.status] }}</small></span><span class="order-inbox-shortcut-action">{{ privateUnread?'Read reply':'Open inbox' }} →</span></button>
     <nav class="structured-actions" aria-label="Store actions">
@@ -331,11 +392,13 @@ async function leave(){
       <button type="button" @click="overlay='feedback'"><StoreGlyph name="pencil"/><span>Feedback</span></button>
       <button type="button" @click="leaveDialog?.open()"><StoreGlyph name="door"/><span>Leave</span></button>
     </nav>
-    <div v-if="catEnabled" class="structured-hint"><p class="cat-hint-copy"><span class="cat-hint-faces"><PixelSprite name="cat-face" :scale="2"/><PixelSprite name="onay-face" :scale="2"/></span><span>Drag yarn · tap Miming or Onay to pet</span></p><button type="button" class="cat-action toss-yarn" aria-label="Toss yarn for Miming and Onay, the shop cats" :disabled="!!overlay" @click="game?.tossYarn()"><StoreGlyph name="yarn"/>Toss yarn</button></div>
+    <div v-if="scene==='outside'" class="structured-hint"><p class="cat-hint-copy"><span>Sit on the bench · try the vending machine</span></p><button type="button" class="cat-action go-inside" aria-label="Walk back into Chits Store" :disabled="!!overlay||transitioning" @click="game?.goInside()"><StoreGlyph name="door"/>Go inside</button></div>
+    <div v-else-if="catEnabled" class="structured-hint"><p class="cat-hint-copy"><span class="cat-hint-faces"><PixelSprite name="cat-face" :scale="2"/><PixelSprite name="onay-face" :scale="2"/></span><span>Drag yarn · tap Miming or Onay to pet</span></p><button type="button" class="cat-action toss-yarn" aria-label="Toss yarn for Miming and Onay, the shop cats" :disabled="!!overlay" @click="game?.tossYarn()"><StoreGlyph name="yarn"/>Toss yarn</button></div>
     <div v-if="overlay" class="overlay-shade" :class="{'chat-overlay':overlay==='chat'||overlay==='jukebox'}" @click.self="overlay=''">
       <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback','chat-dialog':overlay==='chat','jukebox-dialog':overlay==='jukebox','order-chat-dialog':overlay==='chat'&&chatTab==='orders'&&!!selectedOrderId}" role="dialog" aria-labelledby="store-dialog-title">
-        <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ overlay==='chat'?(chatTab==='orders'?'Order inbox':'Community chat'):{menu:"Today's Menu",board:'Live Order Board',cashier:'Staff',chef:'Chef',emotes:'Reactions',feedback:'Feedback box',jukebox:'Jukebox',services:'App development'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
+        <header class="dialog-header"><h2 id="store-dialog-title" class="section-head">{{ overlay==='chat'?(chatTab==='orders'?'Order inbox':'Community chat'):{menu:"Today's Menu",board:'Live Order Board',cashier:'Staff',chef:'Chef',emotes:'Reactions',feedback:'Feedback box',jukebox:'Jukebox',services:'App development',vending:'Vending machine'}[overlay]||overlay }}</h2><button type="button" class="btn secondary dialog-close" aria-label="Close dialog" @click="overlay=''"><span aria-hidden="true">×</span></button></header>
         <FeedbackBox v-if="overlay==='feedback'" ref="feedbackBox"/>
+        <VendingPanel v-if="overlay==='vending'" @vend="game?.vend()" @menu="interact('menu')"/>
         <JukeboxPanel v-if="overlay==='jukebox'" :state="jukebox" :my-vote="jukeboxVote" :pending-vote="jukeboxPendingVote" :message="jukeboxMessage" :status="musicStatus" :music-on="musicOn" :volume="musicVolume" :volume-adjustable="musicVolumeAdjustable" :server-now="jukeboxClock" :connected="connected" @vote="voteJukebox" @toggle="toggleMusic" @volume="setMusicVolume"/>
         <template v-if="overlay==='menu'">
           <p class="menu-greeting">🍡 Hi, {{ me.nickname }}! Here’s the meryenda for {{ menuDate }}.</p>
@@ -360,7 +423,7 @@ async function leave(){
         <template v-else-if="overlay==='emotes'"><div class="reaction-grid"><button v-for="reaction in reactionOptions" :key="reaction.emoji" type="button" class="btn secondary reaction-choice" @click="send({type:'emote',emoji:reaction.emoji});overlay=''"><PixelReaction class="reaction-symbol" :emoji="reaction.emoji"/><span>{{ reaction.label }}</span></button></div></template>
         <template v-else-if="overlay==='chat'">
           <div class="chat-tabs" role="tablist" aria-label="Chat conversations"><button type="button" role="tab" :aria-selected="chatTab==='community'" @click="chatTab='community'">Community <span v-if="unreadChat">{{ unreadChat }}</span></button><button type="button" role="tab" :aria-selected="chatTab==='orders'" @click="chatTab='orders';void loadOrderInbox()">Order inbox <span v-if="privateUnread">{{ privateUnread }}</span></button></div>
-          <template v-if="chatTab==='community'"><div class="chat-messages" aria-live="polite"><div v-if="chat.length===0" class="muted help-text chat-empty">Say hello! Chat messages are temporary.</div><div v-for="c in chat" :key="c.messageId" class="chat-line" :class="{'staff-reply':c.role==='staff'}"><span v-if="c.role==='staff'" class="chat-staff-tag">STAFF</span><strong>{{ c.nickname }}:</strong> {{ c.text }}</div></div><form class="chat-form" @submit.prevent="sendChat"><input ref="chatInput" v-model="message" class="input" maxlength="160" aria-label="Chat message" placeholder="Say hi..." autocomplete="off"><button class="btn small" type="submit" :disabled="!connected||!message.trim()||!chatEnabled">Send</button></form><p v-if="!chatEnabled" class="privacy">Chat is temporarily disabled by staff.</p><p class="privacy">Public room: do not share personal details. Staff can mute or remove visitors. Chat is not permanently stored.</p></template>
+          <template v-if="chatTab==='community'"><div class="chat-messages" aria-live="polite"><div v-if="chat.length===0" class="muted help-text chat-empty">Say hello! Chat messages are temporary.</div><div v-for="c in chat" :key="c.messageId" class="chat-line" :class="{'staff-reply':c.role==='staff'}"><span v-if="c.role==='staff'" class="chat-staff-tag">STAFF</span><span v-else-if="c.scene&&c.scene!==scene" class="chat-staff-tag chat-place-tag">{{ scenes[c.scene].label.toUpperCase() }}</span><strong>{{ c.nickname }}:</strong> {{ c.text }}</div></div><form class="chat-form" @submit.prevent="sendChat"><input ref="chatInput" v-model="message" class="input" maxlength="160" aria-label="Chat message" placeholder="Say hi..." autocomplete="off"><button class="btn small" type="submit" :disabled="!connected||!message.trim()||!chatEnabled">Send</button></form><p v-if="!chatEnabled" class="privacy">Chat is temporarily disabled by staff.</p><p class="privacy">Public room, shared inside the store and out on the street: do not share personal details. Staff can mute or remove visitors. Chat is not permanently stored.</p></template>
           <template v-else><div v-if="myOrders.length" class="order-inbox-list"><button v-for="order in myOrders" :key="order.id" type="button" :class="{selected:selectedOrderId===order.id}" @click="openOrder(order.id)"><strong>#{{ order.number }} <span v-if="order.unread" class="order-inbox-unread">{{ order.unread }}</span></strong><small>{{ orderStatusLabels[order.status] }} · {{ money(order.totalCentavos) }}</small></button></div><p v-else class="menu-message">Your placed orders will appear here. Choose items from Today’s Menu to start.</p>
             <p v-if="orderInboxLoading" class="help-text">Opening order conversation…</p>
             <template v-if="orderDetail&&selectedOrderId===orderDetail.order.id"><details class="order-chat-summary"><summary><span><strong>Order #{{ orderDetail.order.number }}{{ orderDetail.order.name?` · ${orderDetail.order.name}`:'' }}</strong> · {{ orderStatusLabels[orderDetail.order.status] }} · {{ money(orderDetail.order.totalCentavos) }}</span><small>Items ▾</small></summary><div v-for="item in orderDetail.items" :key="item.id"><span>{{ item.quantity }} × {{ item.name }}</span><span>{{ money(item.lineTotalCentavos) }}</span></div></details><div ref="orderFeed" class="chat-messages order-chat-messages" role="log" aria-label="Private order conversation" aria-live="polite"><div v-for="entry in orderDetail.messages" :key="entry.id" class="chat-line" :class="{'staff-reply':entry.role==='staff'}"><strong>{{ entry.role==='system'?'Order':entry.role==='staff'?'Chits Store':'You' }}:</strong> {{ entry.text }}</div></div><form class="chat-form" @submit.prevent="sendOrderChat"><input v-model="orderMessage" class="input" maxlength="500" aria-label="Message staff about this order" placeholder="Message staff about this order…" autocomplete="off"><button class="btn small" type="submit" :disabled="orderSending||!orderMessage.trim()">{{ orderSending?'Sending…':'Send' }}</button></form><p class="privacy">Only you and store staff can see this order conversation.</p></template>

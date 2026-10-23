@@ -1,6 +1,6 @@
 /* Scoped to the public store. Chrome follows the approved pixel-art reference: cream panels, brown pixel borders. */
 .game-shell{--ink:#4a3121;--frame:#6e4a31;--paper:#fcf4e4;--button:#fbf1de;--edge:#b08a5e;--lift:#c9a678;--muted:#8f7357;font-family:'Courier New',monospace;color:#493425}
-.structured-store{width:min(100%,480px);height:calc(100dvh - 32px);min-height:640px;max-height:980px;margin:16px auto;overflow:hidden;border:3px solid var(--frame);border-radius:18px;background:var(--paper);box-shadow:0 6px 0 var(--lift)}
+.structured-store{width:calc(100% - 32px);height:calc(100dvh - 32px);min-height:640px;margin:16px auto;overflow:hidden;border:3px solid var(--frame);border-radius:18px;background:var(--paper);box-shadow:0 6px 0 var(--lift)}
 .structured-store-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0;padding:12px 14px;background:var(--paper);border-bottom:3px solid var(--frame)}
 /* Left: who you are. Right: two matching chips (connection + online count, then music). */
 .visitor-identity{display:flex;align-items:center;gap:12px;flex:1;min-width:0}
@@ -33,6 +33,7 @@
 .cat-action{--shade:#a99be3;display:inline-flex;align-items:center;justify-content:center;gap:6px;flex-shrink:0;min-height:42px;padding:4px 10px;border:2px solid;border-radius:6px;font:10px/1.1 Silkscreen,monospace;text-transform:uppercase;box-shadow:0 3px 0 var(--shade)}
 .cat-action svg{width:18px;height:18px}
 .toss-yarn{--shade:#e3a8d2;border-color:#da94c6;background:#fae0f1;color:#a3478a}
+.go-inside{--shade:#b5d4a0;border-color:#91aa6f;background:#e6f2da;color:#3d7a34}
 .cat-action:active:not(:disabled){transform:translateY(2px);box-shadow:0 1px 0 var(--shade)}.cat-action:disabled{opacity:.5;cursor:default}
 /* Touch fallback for movement; tapping the floor also walks. Hidden for mouse users, as in the reference. */
 .game-shell :deep(.game-joystick){display:none;left:8px;bottom:8px;width:68px;height:68px;border:3px solid #805a3e;background:#f9e7bb66;box-shadow:0 3px 0 #67473144;opacity:.6}.game-shell :deep(.joystick-knob){width:28px;height:28px;border-width:3px}
@@ -60,13 +61,20 @@
 .game-shell .chat-messages .chat-line.staff-reply{margin:6px 0 10px;padding:9px 11px;border:2px solid #78945b;background:#e3efcf;color:#305039;box-shadow:2px 2px 0 #a9bc88;overflow-wrap:anywhere}
 .game-shell .chat-messages .chat-line.staff-reply strong{color:#25432d}
 .chat-staff-tag{display:inline-block;margin-right:6px;padding:2px 4px;border:1px solid #91aa6f;background:#d3e3b1;color:#3e5939;font-family:Silkscreen,monospace;font-size:8px;line-height:1.4;vertical-align:middle}
+/* Where a visitor spoke from, when it isn't the reader's own scene (chat is shared inside and outside). */
+.chat-staff-tag.chat-place-tag{border-color:#c9a678;background:#f6e9cf;color:#7a5a3c}
 .game-shell .store-dialog .privacy{font-family:'Courier New',monospace;font-size:11px;color:#7f684f;line-height:1.6}
 .order-status-group{border:2px solid #c7a576;border-radius:0;background:#f2e4c9;box-shadow:inset 2px 2px 0 #fffae9}
 .order-status-heading{font-size:11px;color:#674731}.order-status-heading>span{border:1px solid #b08a5e;border-radius:0;background:#e3cca3;font-family:'Courier New',monospace}
 .game-shell .order-chips .pill{display:inline-flex;flex-direction:column;align-items:flex-start;gap:2px;font-family:'Courier New',monospace;font-size:12px;border-radius:0;padding:6px 8px}.game-shell .order-chips .pill strong{font-weight:800}.game-shell .order-chips .pill small{font-size:11px;line-height:1.35}
 .game-shell .store-dialog .reaction-choice{font-size:9px;border-radius:0;min-height:88px;gap:12px}.reaction-symbol{width:32px;height:32px;image-rendering:pixelated;flex-shrink:0}
 .game-shell button:focus-visible,.game-shell a:focus-visible,.game-shell input:focus-visible{outline:3px solid #617e4d;outline-offset:4px}
-@media(min-width:600px){.structured-store{width:clamp(380px,calc((100dvh - 32px - 214px) * .6207 + 6px),480px)}}
+/* The game spans the full width; controls, notices and dialogs keep a comfortable width, centred. */
+@media(min-width:600px){
+  .structured-actions,.structured-hint,.order-inbox-shortcut{padding-left:max(12px,calc((100% - 720px) / 2));padding-right:max(12px,calc((100% - 720px) / 2))}
+  .game-stage .structured-notice{left:max(12px,calc(50% - 300px));right:max(12px,calc(50% - 300px))}
+  .game-shell .store-dialog{max-width:560px}
+}
 @media(max-width:599px){.structured-store{width:100%;height:100dvh;min-height:520px;max-height:none;margin:0;border:0;border-radius:0;box-shadow:none}.structured-store-top{padding:10px 12px}.visitor-portrait{width:46px;height:46px}.visitor-copy>strong{font-size:14px}.structured-actions{gap:6px;padding:10px 10px 8px}.structured-actions button{min-height:56px;font-size:8px}.structured-hint{gap:6px;padding:2px 10px 10px}.cat-hint-copy{padding:4px 8px;font-size:11px}.cat-action{padding:4px 8px;font-size:9px}.game-shell .overlay-shade{padding:16px}.game-shell .store-dialog{padding:16px;gap:12px}.game-shell .dialog-header .section-head{font-size:13px}.game-shell .store-dialog .reaction-choice{font-size:8px}}
 @media(max-width:380px){.structured-store-top{gap:10px}.visitor-identity{gap:10px}.visit-status{width:104px}.visitor-copy>strong{font-size:13px}.cat-hint-faces{display:none}.cat-action svg{display:none}}
 @media(max-width:340px){.structured-actions{grid-template-columns:repeat(3,minmax(0,1fr))}.structured-actions button{min-height:46px;flex-direction:row;gap:5px}.structured-actions svg{width:18px;height:18px}}

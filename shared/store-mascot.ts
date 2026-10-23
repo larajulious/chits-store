@@ -1,6 +1,8 @@
 // visiting / snuggling: Miming strolls over to Onay and the two sit together. They never fight.
 export type CatMood='idle'|'walking'|'sitting'|'resting'|'sleeping'|'stretching'|'noticing_yarn'|'approaching_yarn'|'playing_with_yarn'|'returning_to_idle'|'visiting'|'snuggling'
 export type CatName='Miming'|'Onay'
+// The store-wide count of taps on each cat; it only ever goes up.
+export type CatTaps=Record<CatName,number>
 export type CatSnapshot={name:CatName;x:number;y:number;mood:CatMood;facing:-1|1;purring:boolean}
 export type MascotSnapshot={cats:CatSnapshot[];yarn:{x:number;y:number;held:boolean;moving:boolean}}
 // Miming roams the floor from beside the yarn. Onay stays put beside the feedback board,

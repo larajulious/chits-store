@@ -123,6 +123,10 @@ export function db() {
         track_ids TEXT
       );
       INSERT OR IGNORE INTO jukebox_settings(id) VALUES(1);
+      CREATE TABLE IF NOT EXISTS cat_taps (
+        name TEXT PRIMARY KEY,
+        count INTEGER NOT NULL DEFAULT 0 CHECK (count >= 0)
+      );
     `)
     // Add completion without rebuilding legacy tables or changing their status CHECK.
     const connection=database

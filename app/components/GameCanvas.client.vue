@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { Player, BoardOrder, StoreGame, JukeboxScene } from '../../game/createGame'
-import type { CatName } from '../../shared/store-mascot'
-const props=defineProps<{nickname:string;avatar:string;players:Player[];selfId:string;board:BoardOrder[];catEnabled?:boolean;guideEnabled?:boolean;controlsEnabled?:boolean;jukebox?:JukeboxScene;menuItems?:string[]|null}>()
-const emit=defineEmits<{(e:'move',pos:{x:number;y:number}):void;(e:'interact',kind:string):void}>()
+import type { CatName, CatTaps } from '../../shared/store-mascot'
+const props=defineProps<{nickname:string;avatar:string;players:Player[];selfId:string;board:BoardOrder[];catEnabled?:boolean;guideEnabled?:boolean;controlsEnabled?:boolean;jukebox?:JukeboxScene;menuItems?:string[]|null;catTaps?:CatTaps|null}>()
+const emit=defineEmits<{(e:'move',pos:{x:number;y:number}):void;(e:'interact',kind:string):void;(e:'catTap',name:CatName):void}>()
 const target=ref<HTMLElement>()
 let api:StoreGame|undefined
 let disposed=false,ready=false
@@ -34,17 +34,18 @@ onMounted(async()=>{
   const [{createGame}]=await Promise.all([import('../../game/createGame'),loadPixelFont()])
   if(disposed||!target.value)return
   motionQuery=window.matchMedia('(prefers-reduced-motion: reduce)')
-  api=createGame(target.value,{nickname:props.nickname,avatar:props.avatar as any,onMove:(x,y)=>emit('move',{x,y}),onInteract:kind=>emit('interact',kind),onCatMeow:playCatSound,catEnabled:props.catEnabled,guideEnabled:props.guideEnabled,reducedMotion:motionQuery.matches,controlsEnabled:props.controlsEnabled!==false,zoom:renderZoom(target.value)})
+  api=createGame(target.value,{nickname:props.nickname,avatar:props.avatar as any,onMove:(x,y)=>emit('move',{x,y}),onInteract:kind=>emit('interact',kind),onCatMeow:playCatSound,onCatTap:name=>emit('catTap',name),catEnabled:props.catEnabled,guideEnabled:props.guideEnabled,reducedMotion:motionQuery.matches,controlsEnabled:props.controlsEnabled!==false,zoom:renderZoom(target.value)})
   motionQuery.addEventListener('change',motionChanged)
   document.addEventListener('visibilitychange',visibilityChanged)
   visibilityChanged()
-  api.game.events.once('ready',()=>{ready=true;api?.setPlayers(props.players,props.selfId);api?.setBoard(props.board);if(props.jukebox)api?.setJukebox(props.jukebox);api?.setMenuItems(props.menuItems??null);if(pendingStaffMessage!==undefined){api?.showStaffBubble(pendingStaffMessage);pendingStaffMessage=undefined}})
+  api.game.events.once('ready',()=>{ready=true;api?.setPlayers(props.players,props.selfId);api?.setBoard(props.board);if(props.jukebox)api?.setJukebox(props.jukebox);api?.setMenuItems(props.menuItems??null);if(props.catTaps)api?.setCatTaps(props.catTaps);if(pendingStaffMessage!==undefined){api?.showStaffBubble(pendingStaffMessage);pendingStaffMessage=undefined}})
 })
 onBeforeUnmount(()=>{disposed=true;ready=false;pendingStaffMessage=undefined;motionQuery?.removeEventListener('change',motionChanged);document.removeEventListener('visibilitychange',visibilityChanged);for(const audio of Object.values(catAudio))audio.pause();api?.game.destroy(true);api=undefined})
 watch(()=>[props.players,props.selfId] as const,()=>api?.setPlayers(props.players,props.selfId))
 watch(()=>props.board,()=>api?.setBoard(props.board),{deep:true})
 watch(()=>props.menuItems,items=>api?.setMenuItems(items??null))
 watch(()=>props.jukebox,state=>{if(state)api?.setJukebox(state)})
+watch(()=>props.catTaps,taps=>{if(taps&&ready)api?.setCatTaps(taps)})
 watch(()=>props.controlsEnabled,enabled=>{end();api?.setControlsEnabled(enabled!==false)})
 // Knob travel in CSS pixels; matches the compact pixel joystick ring.
 const JOY_RANGE=24

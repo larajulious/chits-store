@@ -2,19 +2,21 @@ import Phaser from 'phaser'
 import { avatarOptions, type AvatarId } from '../shared/avatars'
 import { reactionOptions } from '../shared/reactions'
 import type {OrderStatus} from '../shared/order-status'
-import {mascotFloorPoint,residentCats,storeObstacles,type CatName,type CatSnapshot} from '../shared/store-mascot'
+import {mascotFloorPoint,residentCats,storeObstacles,type CatName,type CatSnapshot,type CatTaps} from '../shared/store-mascot'
 import {createLocalMascot} from './localMascot'
 import * as art from './pixelArt'
 
 export type Avatar = AvatarId
 export type Player = { id:string;nickname:string;avatar:string;x:number;y:number }
 export type BoardOrder = { id:number;number:string;name:string|null;status:OrderStatus }
-export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean;petCat:()=> 'petted'|'too_far'|'busy';showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void;setJukebox:(state:JukeboxScene)=>void;setMenuItems:(items:string[]|null)=>void }
+export type StoreGame = { game:Phaser.Game; setDirection:(x:number,y:number)=>void;setPlayers:(players:Player[],selfId:string)=>void;movePlayer:(id:string,x:number,y:number)=>void;tossYarn:()=>boolean;petCat:()=> 'petted'|'too_far'|'busy';showBubble:(id:string,text:string)=>void;showStaffBubble:(text:string)=>void;setBoard:(orders:BoardOrder[])=>void;setReducedMotion:(value:boolean)=>void;setControlsEnabled:(value:boolean)=>void;setJukebox:(state:JukeboxScene)=>void;setMenuItems:(items:string[]|null)=>void;setCatTaps:(taps:CatTaps)=>void }
 // playing: the shared jukebox has a song on. audible: this visitor is listening to it.
 export type JukeboxScene={playing:boolean;audible:boolean}
-type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onCatMeow:(name:CatName)=>void;catEnabled?:boolean;guideEnabled?:boolean;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number}
+type Options = {nickname:string;avatar:Avatar;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onCatMeow:(name:CatName)=>void;onCatTap?:(name:CatName)=>void;catEnabled?:boolean;guideEnabled?:boolean;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number}
 type Character = {sprite:Phaser.GameObjects.Image;avatar:string;phase:number}
-type ShopCat = {name:CatName;roams:boolean;sprite:Phaser.GameObjects.Image;label:Tag;skin:string}
+type ShopCat = {name:CatName;roams:boolean;sprite:Phaser.GameObjects.Image;label:Tag;skin:string;counter?:Tag;counterUntil:number}
+// The store-wide tap tally per cat comes from the server; the bubble names it in each cat's voice.
+const CAT_TAP_WORDS:Record<CatName,string>={Miming:'meow',Onay:'purr'}
 // Texture prefix per cat; Miming keeps the original cat-* names.
 const CAT_SKINS:Record<CatName,string>={Miming:'cat',Onay:'onay'}
 const CAT_POSES=[['idle','stand'],['walk','walk'],['sit','sit'],['rest','lie'],['sleep','sleep'],['stretch','stretch'],['notice','notice'],['play','play']] as const
@@ -153,6 +155,8 @@ class StoreScene extends Phaser.Scene {
   private catHeart?:Phaser.GameObjects.Graphics
   private catHeartFrame=-2
   private lastMeowAt=-Infinity
+  // Null until the server has sent the shared totals; taps before then aren't shown or sent.
+  private catTaps:CatTaps|null=null
   private yarnSprite?:Phaser.GameObjects.Image
   private fixer?:Phaser.GameObjects.Image
   private fixerDust?:Phaser.GameObjects.Graphics
@@ -251,7 +255,7 @@ class StoreScene extends Phaser.Scene {
       for(const cat of this.mascot.snapshot(0).cats){
         const skin=CAT_SKINS[cat.name],roams=residentCats.find(resident=>resident.name===cat.name)?.roams!==false
         const sprite=this.sprite(cat.x,cat.y+10,`${skin}-${cat.mood==='sleeping'?'sleep':'sit'}`,cat.y+12).setOrigin(.5,1)
-        this.cats.push({name:cat.name,roams,sprite,skin,label:this.tag(cat.x,cat.y-36,cat.name.toUpperCase()).setDepth(tagDepth(cat.y))})
+        this.cats.push({name:cat.name,roams,sprite,skin,label:this.tag(cat.x,cat.y-36,cat.name.toUpperCase()).setDepth(tagDepth(cat.y)),counterUntil:0})
       }
       this.catHeart=this.add.graphics()
       this.yarnSprite=this.sprite(204,474,'yarn-ball',450)
@@ -279,7 +283,7 @@ class StoreScene extends Phaser.Scene {
       }
       // The front-most cat wins when the two overlap.
       const tappedCat=[...this.cats].sort((a,b)=>b.sprite.y-a.sprite.y).find(({sprite})=>Math.abs(x-sprite.x)<27&&y>sprite.y-sprite.displayHeight-4&&y<sprite.y+4)
-      if(tappedCat){this.tapFeedback(x,y);const result=this.petCat(tappedCat.name);if(result!=='petted')this.meow(tappedCat.name);return}
+      if(tappedCat){this.tapFeedback(x,y);this.countCatTap(tappedCat);const result=this.petCat(tappedCat.name);if(result!=='petted')this.meow(tappedCat.name);return}
       // Tapping the handyman makes him stop work and apologise for the renovation.
       if(this.fixer&&Math.abs(x-this.fixer.x)<26&&Math.abs(y-this.fixer.y)<26){this.tapFeedback(x,y);this.fixerSpeak();return}
       // Halloween decorations react on the spot, before the counter and board areas behind them.
@@ -385,6 +389,7 @@ class StoreScene extends Phaser.Scene {
     if(!ball)return
     snapshot.cats.forEach((state,i)=>{const view=this.cats[i];if(view)this.drawCat(view,state,motion)})
     this.spreadCatLabels()
+    this.updateCatCounters()
     this.updateCatHeart(snapshot.cats,motion)
     ball.setPosition(snapshot.yarn.x,snapshot.yarn.y)
     setDepthIfChanged(ball,ball.y+12)
@@ -419,6 +424,37 @@ class StoreScene extends Phaser.Scene {
     if(overlap<=0||Math.abs(b.label.y-a.label.y)>16)return
     const shift=overlap/2*(dx>=0?1:-1)
     a.label.x-=shift;b.label.x+=shift
+  }
+  // Every tap on a cat adds to its tally ("12 meows and counting"), shown above its name tag for a moment.
+  // The visitor's own tap shows +1 at once; the server's totals (everyone's taps) follow shortly.
+  private countCatTap(cat:ShopCat){
+    if(!this.catTaps)return
+    this.catTaps[cat.name]++
+    this.opts.onCatTap?.(cat.name)
+    const text=this.catTapText(cat.name)
+    if(cat.counter)cat.counter.setText(text).setVisible(true)
+    else cat.counter=this.tag(cat.label.x,cat.label.y,text)
+    cat.counterUntil=this.time.now+2200
+  }
+  private catTapText(name:CatName){
+    const count=this.catTaps?.[name]??0,word=CAT_TAP_WORDS[name]
+    return `${count.toLocaleString('en-US')} ${count===1?word:`${word}s`} and counting`
+  }
+  // Counts only go up, so a total that hasn't caught up with this visitor's own taps yet never shows a drop.
+  setCatTaps(taps:CatTaps){
+    const current=this.catTaps
+    this.catTaps={...taps}
+    for(const name of Object.keys(taps) as CatName[])if(current&&current[name]>taps[name])this.catTaps[name]=current[name]
+    for(const cat of this.cats){const text=this.catTapText(cat.name);if(cat.counter?.visible&&cat.counter.text!==text)cat.counter.setText(text)}
+  }
+  private updateCatCounters(){
+    for(const {counter,counterUntil,label} of this.cats){
+      if(!counter?.visible)continue
+      if(this.time.now>=counterUntil){counter.setVisible(false);continue}
+      // The tally is wider than a name tag, so keep it inside the room when the cat is near a wall.
+      const half=counter.getBounds().width/2
+      counter.setPosition(Math.round(Math.max(half+4,Math.min(W-half-4,label.x))/PX)*PX,label.y-24);setDepthIfChanged(counter,label.depth+.5)
+    }
   }
   // A small pixel heart floats above the two name tags while the cats snuggle. Redrawn only on a new frame.
   private updateCatHeart(cats:CatSnapshot[],motion:boolean){
@@ -761,5 +797,5 @@ export function createGame(el:HTMLElement,opts:Options):StoreGame{
   const scene=new StoreScene({...opts,zoom})
   const game=new Phaser.Game({type:Phaser.AUTO,parent:el,width:W*zoom,height:H*zoom,backgroundColor:'#6e4a31',pixelArt:true,
     scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_HORIZONTALLY,width:W*zoom,height:H*zoom},scene:[scene],render:{antialias:false}})
-  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(scene.sys?.isActive())scene.movePlayer(id,x,y)},tossYarn:()=>scene.sys?.isActive()?scene.tossYarn():false,petCat:()=>scene.sys?.isActive()?scene.petCat():'busy',showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value),setJukebox:state=>scene.setJukebox(state),setMenuItems:items=>scene.setMenuItems(items)}
+  return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(scene.sys?.isActive())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(scene.sys?.isActive())scene.movePlayer(id,x,y)},tossYarn:()=>scene.sys?.isActive()?scene.tossYarn():false,petCat:()=>scene.sys?.isActive()?scene.petCat():'busy',showBubble:(id,t)=>{if(scene.sys?.isActive())scene.showBubble(id,t)},showStaffBubble:(text)=>{if(scene.sys?.isActive())scene.showStaffBubble(text)},setBoard:(orders)=>{if(scene.sys?.isActive())scene.setBoard(orders)},setReducedMotion:value=>scene.setReducedMotion(value),setControlsEnabled:value=>scene.setControlsEnabled(value),setJukebox:state=>scene.setJukebox(state),setMenuItems:items=>scene.setMenuItems(items),setCatTaps:taps=>scene.setCatTaps(taps)}
 }

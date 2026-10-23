@@ -3,6 +3,7 @@ import { allowedOrigin, visitorSessionFromCookie, visitorName } from '../utils/a
 import { joinRoom, leaveRoom, findMember, broadcast, publishChat, playerList, isChatEnabled, isMuted, authorized, recordInteraction } from '../utils/room'
 import {isStoreOpen} from '../utils/store'
 import {jukeboxState, jukeboxVoteOf, voteJukebox} from '../utils/jukebox'
+import {catTaps, isCatName, tapCat} from '../utils/cat-taps'
 
 export default defineWebSocketHandler({
   upgrade(request){
@@ -24,7 +25,10 @@ export default defineWebSocketHandler({
       x:180, y:510, lastMove:Date.now(), lastChat:0, chatWindowStart:Date.now(), chatCount:0,
       send:payload => peer.send(payload), close:()=>peer.close() })
     // Late joiners and reconnects get the shared timeline once; later changes arrive as broadcasts.
-    if(findMember(peer.id))peer.send(JSON.stringify({type:'jukebox',state:jukeboxState(),myVote:jukeboxVoteOf(visitor.id)}))
+    if(findMember(peer.id)){
+      peer.send(JSON.stringify({type:'jukebox',state:jukeboxState(),myVote:jukeboxVoteOf(visitor.id)}))
+      peer.send(JSON.stringify({type:'cat_taps',taps:catTaps()}))
+    }
   },
   message(peer, message) {
     if(!isStoreOpen()){peer.send(JSON.stringify({type:'store_closed'}));leaveRoom(peer.id);peer.close();return}
@@ -34,7 +38,7 @@ export default defineWebSocketHandler({
     if(!rate||now-rate.at>=1000)peer.context.rate={at:now,count:1}
     else if(++rate.count>40){leaveRoom(peer.id);peer.close(1008,'Message rate exceeded');return}
     if (message.text().length > 1000) return
-    let data: { type?:string; text?:string; x?:number; y?:number; emoji?:string; trackId?:string; round?:number }
+    let data: { type?:string; text?:string; x?:number; y?:number; emoji?:string; trackId?:string; round?:number; name?:string }
     try { const parsed:unknown=JSON.parse(message.text());if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))return;data=parsed } catch { return }
     if (data.type === 'move') {
       const x=data.x, y=data.y, now=Date.now()
@@ -69,6 +73,8 @@ export default defineWebSocketHandler({
       if(typeof data.trackId!=='string'||data.trackId.length>40)return
       const result=voteJukebox(p.visitorId,data.trackId,Number.isSafeInteger(data.round)?data.round:undefined)
       peer.send(JSON.stringify(result.ok?{type:'jukebox_vote_ok',round:result.round,trackId:result.trackId}:{type:'jukebox_vote_rejected',round:result.round,reason:result.reason}))
+    } else if (data.type==='cat_tap') {
+      if(isCatName(data.name))tapCat(p.visitorId,data.name)
     } else if (data.type==='ping') {
       // serverTime lets clients estimate their clock offset for music sync.
       peer.send(JSON.stringify({type:'pong',count:playerList().length,serverTime:Date.now()}))

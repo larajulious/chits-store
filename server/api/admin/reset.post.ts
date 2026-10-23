@@ -36,6 +36,7 @@ export default defineEventHandler(async event=>{
     if(selected.has('feedback'))connection.prepare('DELETE FROM feedback').run()
     // Keep AUTOINCREMENT counters so an old cookie can never refer to a new visitor.
     if(selected.has('visitors'))connection.prepare('DELETE FROM visitors').run()
+    // cat_taps is never reset: the cats' tap counts only ever go up.
   }).immediate()
 
   if(selected.has('visitors')){resetVisitorRoom();clearJukeboxVotes()}

@@ -8,7 +8,7 @@
     "start": "node scripts/start.mjs",
     "build": "nuxt build",
     "typecheck": "nuxt typecheck",
-    "test": "node --test tests/public-foundation.test.mjs tests/production-start.test.mjs tests/feedback.test.mjs tests/order-numbering.test.mjs tests/store-availability.test.mjs tests/daily-menu.test.mjs tests/admin-reset.test.mjs tests/resident-cat.test.mjs tests/customer-orders.test.mjs tests/jukebox.test.mjs",
+    "test": "node --test tests/public-foundation.test.mjs tests/production-start.test.mjs tests/feedback.test.mjs tests/order-numbering.test.mjs tests/store-availability.test.mjs tests/daily-menu.test.mjs tests/admin-reset.test.mjs tests/resident-cat.test.mjs tests/customer-orders.test.mjs tests/jukebox.test.mjs tests/cat-taps.test.mjs",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
     "setup": "node scripts/setup.mjs"

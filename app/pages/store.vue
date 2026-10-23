@@ -7,6 +7,7 @@ import type { ChatMessage } from '../../shared/chat'
 import type { CustomerOrderSummary, CustomerOrderDetail } from '../../shared/customer-order'
 import {playChatSound} from '../utils/chatSound'
 import type {JukeboxMyVote,JukeboxState} from '../../shared/jukebox'
+import type {CatName,CatTaps} from '../../shared/store-mascot'
 import {canSetVolume,createJukeboxPlayer,readJukeboxPrefs,saveJukeboxPrefs,type JukeboxListenStatus,type JukeboxPlayer} from '../utils/jukeboxPlayer'
 const route=useRoute()
 const featureConfig=useRuntimeConfig().public
@@ -38,6 +39,8 @@ const visitorAvatar=computed(()=>isAvatar(me.value?.avatar)?me.value.avatar:'moc
 const online=computed(()=>players.value.length)
 const overlay=ref(''), message=ref(''), chat=ref<ChatMessage[]>([]), unreadChat=ref(0), notice=ref(''), connected=ref(false), returningHome=ref(false), chatEnabled=ref(true)
 const jukebox=ref<JukeboxState|null>(null),jukeboxVote=ref<JukeboxMyVote>(null),jukeboxPendingVote=ref(''),jukeboxMessage=ref(''),jukeboxClock=ref(Date.now())
+// Store-wide tap totals for Miming and Onay, sent by the server on connect and after taps.
+const catTaps=ref<CatTaps|null>(null)
 const musicStatus=ref<JukeboxListenStatus>('off'),musicOn=ref(false),musicVolume=ref(.35),musicVolumeAdjustable=ref(true)
 // The header indicator reads ON only while this visitor actually hears the shared music.
 const musicListening=computed(()=>musicOn.value&&!['off','needs_gesture'].includes(musicStatus.value))
@@ -273,6 +276,7 @@ function connect(){
     if(data.type==='jukebox_vote_ok'){clearTimeout(jukeboxVoteTimeout);jukeboxPendingVote.value='';if(jukebox.value?.round===data.round)jukeboxVote.value={round:data.round,trackId:data.trackId}}
     if(data.type==='jukebox_vote_rejected'){clearTimeout(jukeboxVoteTimeout);jukeboxPendingVote.value='';jukeboxMessage.value=jukeboxRejections[data.reason]||'Could not save your vote.'}
     if(data.type==='chat_enabled'){chatEnabled.value=data.enabled}
+    if(data.type==='cat_taps'&&data.taps&&typeof data.taps==='object')catTaps.value=data.taps
     if(data.type==='chat_blocked')notice.value='Chat is unavailable right now.'
     if(data.type==='chat_slow_down')notice.value='Please slow down your messages.'
     if(['room_full','kicked','store_closed','choose_avatar','replaced'].includes(data.type))void returnHome()
@@ -309,7 +313,7 @@ async function leave(){
   <template v-if="me&&!returningHome">
     <div class="game-stage">
       <aside v-if="notice" class="structured-notice" role="status"><strong>{{ notice }}</strong><button type="button" aria-label="Dismiss notice" @click="notice=''">✕</button></aside>
-      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving" :jukebox="jukeboxScene" :menu-items="guideMenuItems" @move="p=>send({type:'move',x:p.x,y:p.y})" @interact="interact"/></ClientOnly>
+      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :nickname="me.nickname" :avatar="me.avatar" :players="players" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving" :jukebox="jukeboxScene" :menu-items="guideMenuItems" :cat-taps="catTaps" @move="p=>send({type:'move',x:p.x,y:p.y})" @cat-tap="(name:CatName)=>send({type:'cat_tap',name})" @interact="interact"/></ClientOnly>
     </div>
     <button v-if="featuredOrder" type="button" class="order-inbox-shortcut" :class="{'has-reply':privateUnread>0}" :aria-label="privateUnread?`Order inbox, ${privateUnread} unread staff ${privateUnread===1?'reply':'replies'}. Open order ${featuredOrder.number}`:`Open order inbox for order ${featuredOrder.number}`" @click="openOrderInbox(featuredOrder.id)"><span class="order-inbox-shortcut-icon"><StoreGlyph name="chat"/><span v-if="privateUnread" class="order-inbox-shortcut-count" aria-hidden="true">{{ privateUnread>9?'9+':privateUnread }}</span></span><span class="order-inbox-shortcut-copy"><strong>{{ privateUnread?'New reply from staff':'Your order inbox' }}</strong><small>Order #{{ featuredOrder.number }}{{ featuredOrder.name?` · ${featuredOrder.name}`:'' }} · {{ orderStatusLabels[featuredOrder.status] }}</small></span><span class="order-inbox-shortcut-action">{{ privateUnread?'Read reply':'Open inbox' }} →</span></button>
     <nav class="structured-actions" aria-label="Store actions">

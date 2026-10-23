@@ -37,7 +37,7 @@ test('Kape & Chits joins the world: linked doors, arrival spots and café seats'
   // A jeepney is boarded from the street only, and drops its riders in front of the store; its bench is its floor.
   assert.equal(sceneLinked('outside','jeepney'),true);assert.equal(sceneLinked('store','jeepney'),false);assert.equal(sceneLinked('jeepney','cafe'),false)
   assert.deepEqual(arrivalSpot('outside','jeepney'),scenes.outside.spawn)
-  assert.equal(jeepneySeats.length,7);for(const seat of jeepneySeats)assert.equal(onSceneFloor('jeepney',seat.x,seat.y),true)
+  assert.equal(jeepneySeats.length,6);for(const seat of jeepneySeats)assert.equal(onSceneFloor('jeepney',seat.x,seat.y),true)
   // The store's deck matches the café's: its benches and railing spots are the same places as theirs.
   assert.equal(sceneSeats.store,storeSeats);assert.deepEqual(storeSeats,[...cafeSeats.slice(8,12),...cafeSeats.slice(14,19)])
   assert.equal(isSeat(8,'store'),true);assert.equal(isSeat(9,'store'),false)

@@ -1,9 +1,9 @@
 import { defineEventHandler, setHeader } from 'h3'
 import { requireVisitor, visitorName } from '../../utils/auth'
-import { requireStoreOpen } from '../../utils/store'
+import { isStoreOpen } from '../../utils/store'
+// storeOpen lets the page start a visit on the street when the store is closed.
 export default defineEventHandler(event => {
   const visitor = requireVisitor(event)
-  requireStoreOpen()
   setHeader(event, 'Cache-Control', 'no-store')
-  return { nickname: visitorName(visitor), avatar: visitor.avatar_key }
+  return { nickname: visitorName(visitor), avatar: visitor.avatar_key, storeOpen: isStoreOpen() }
 })

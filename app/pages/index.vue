@@ -19,7 +19,8 @@ async function refreshStoreStatus(){
   catch{storeOpen.value=false;statusReady.value=false}
 }
 async function enter() {
-  if (saving.value||!statusReady.value||!storeOpen.value) return
+  // Closed or open, visitors can come in; a closed store puts them on the street outside.
+  if (saving.value||!statusReady.value) return
   saving.value = true; error.value = ''
   try {
     await $fetch('/api/visitors/join', { method:'POST', body:{ avatar:avatar.value } })

@@ -2,6 +2,7 @@ import { activeVisitor, getVisitor, publicOrder, type OrderRow } from './db'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, AdminChatState } from '../../shared/chat'
 import { benchSeats, scenes, SEAT_REACH, type Pose, type SceneId } from '../../shared/world'
+import { isStoreOpen } from './store'
 
 type Connection = {
   id: string
@@ -98,7 +99,7 @@ export function joinRoom(p: Connection) {
   const previous=interactions.get(p.visitorId)
   if(previous)Object.assign(p,previous)
   members.set(p.id, p)
-  p.send(serialize({ type:'welcome', selfId:p.id, scene:p.scene, players:playerList(p.scene), online:members.size, chatEnabled }))
+  p.send(serialize({ type:'welcome', selfId:p.id, scene:p.scene, players:playerList(p.scene), online:members.size, chatEnabled, storeOpen:isStoreOpen() }))
   broadcastPresence()
 }
 export function leaveRoom(id: string) {
@@ -107,13 +108,18 @@ export function leaveRoom(id: string) {
 }
 // Walking through a door: the visitor leaves one scene's presence and appears at the other scene's spawn.
 // The same request twice is answered again (the client may have missed it); quick repeats are refused.
+// While the store is closed its door is locked: visitors stay on the street.
 export function changeScene(p:Connection,scene:SceneId){
   const now=Date.now()
+  if(scene==='store'&&!isStoreOpen()){p.send(serialize({type:'scene_rejected',scene:p.scene,reason:'closed'}));return false}
   if(now-p.lastSceneChange<800){p.send(serialize({type:'scene_rejected',scene:p.scene}));return false}
-  p.scene=scene;p.lastSceneChange=now;p.x=scenes[scene].spawn.x;p.y=scenes[scene].spawn.y;p.lastMove=now;p.pose='stand';p.seat=null
-  p.send(serialize({type:'scene_changed',scene,x:p.x,y:p.y,players:playerList(scene),online:members.size}))
+  placeInScene(p,scene,now)
   broadcastPresence()
   return true
+}
+function placeInScene(p:Connection,scene:SceneId,now:number){
+  p.scene=scene;p.lastSceneChange=now;p.x=scenes[scene].spawn.x;p.y=scenes[scene].spawn.y;p.lastMove=now;p.pose='stand';p.seat=null
+  p.send(serialize({type:'scene_changed',scene,x:p.x,y:p.y,players:playerList(scene),online:members.size}))
 }
 // Sitting is only possible on a free bench seat the visitor is standing at.
 export function sitDown(p:Connection,seat:number){
@@ -147,14 +153,14 @@ export function disconnectVisitor(id: string) {
   member.close()
   leaveRoom(id)
 }
+// Closing the store shows everyone the street: visitors inside are walked out to the pavement, nobody is disconnected.
 export function closeStoreRoom(){
-  const leaving=[...members.values()]
-  members.clear()
-  for(const member of leaving){
-    try{member.send(serialize({type:'store_closed'}))}catch{}
-    try{member.close()}catch{}
-  }
+  const now=Date.now()
+  for(const member of members.values())if(member.scene==='store'){try{placeInScene(member,'outside',now)}catch{members.delete(member.id)}}
+  broadcast({type:'store_status',open:false})
+  broadcastPresence()
 }
+export function reopenStoreRoom(){broadcast({type:'store_status',open:true})}
 export function clearChatHistory(){
   chatHistory.length=0
   broadcast({type:'chat_reset'})

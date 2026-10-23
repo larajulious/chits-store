@@ -14,8 +14,8 @@ const selected=computed(()=>avatarOptions.find(option=>option.id===props.avatar)
       <section class="lobby-welcome" aria-labelledby="welcome-heading">
         <p class="lobby-eyebrow">YOUR NEIGHBORHOOD VIRTUAL BAKERY</p>
         <h1 v-if="storeOpen||!statusReady" id="welcome-heading">Come in.<br>Make yourself<br><em>at home.</em></h1>
-        <h1 v-else id="welcome-heading">See you<br><em>again soon.</em></h1>
-        <p class="welcome-copy">{{ statusReady&&!storeOpen?'Chits Meryenda Hub is closed right now. Come back when we open the doors again.':'A cozy place to hang out, meet other visitors, and follow what’s cooking.' }}</p>
+        <h1 v-else id="welcome-heading">Closed for now.<br>Come hang out<br><em>outside.</em></h1>
+        <p class="welcome-copy">{{ statusReady&&!storeOpen?'Chits Meryenda Hub is closed right now, but the street outside is open. Meet other visitors, chat and take a seat on the bench.':'A cozy place to hang out, meet other visitors, and follow what’s cooking.' }}</p>
         <div class="bakery-scene" :class="{'scene-closed':statusReady&&!storeOpen}" aria-hidden="true">
           <div class="welcome-store">
             <div class="store-roof"/>
@@ -45,8 +45,8 @@ const selected=computed(()=>avatarOptions.find(option=>option.id===props.avatar)
         <p class="carousel-hint"><span>Swipe to explore all {{ avatarOptions.length }} buddies</span><StoreGlyph name="arrow"/></p>
         <div class="buddy-selection" aria-live="polite"><span class="selected-portrait"><AvatarIcon :avatar="avatar"/></span><div><span class="selection-label">YOUR FOOD BUDDY</span><strong>{{ selected.label }}</strong></div><span class="selection-ready"><StoreGlyph v-if="storeOpen" name="check"/>{{ storeOpen?'Ready to visit':'See you soon' }}</span></div>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
-        <button class="enter-bakery" type="submit" :disabled="saving||!statusReady||!storeOpen"><span>{{ saving?'Opening the door…':!statusReady?'Checking store…':storeOpen?'Enter the store':'Store closed' }}</span><StoreGlyph name="arrow"/></button>
-        <p class="entry-note">{{ statusReady&&!storeOpen?'Please visit us again soon.':'No account needed. We’ll give you a guest name.' }}</p>
+        <button class="enter-bakery" type="submit" :disabled="saving||!statusReady"><span>{{ saving?'Opening the door…':!statusReady?'Checking store…':storeOpen?'Enter the store':'Visit the street' }}</span><StoreGlyph name="arrow"/></button>
+        <p class="entry-note">{{ statusReady&&!storeOpen?'No account needed. Ordering opens again when we do.':'No account needed. We’ll give you a guest name.' }}</p>
       </form>
     </div>
     <footer class="lobby-footer"><span>A little pause in your day.</span><span>Choose a buddy. Stay awhile.</span></footer>

@@ -174,6 +174,15 @@ export function storeDoorArt(frame:0|1|2|3){
   return art
 }
 
+// The little board hung on the store doors while staff have closed the store; the scene writes CLOSED on it.
+export function closedSignArt(){
+  const art=new PixelArt(28,15)
+  art.set(13,0,'#5e5a57').set(14,0,'#5e5a57')
+  for(let i=1;i<5;i++)art.set(13-i*2,i,'#5e5a57').set(14+i*2,i,'#5e5a57')
+  art.box(1,5,26,10,'#fff8ea','#ad513f').rect(2,6,24,1,'#ffffff')
+  return art.outline(INK)
+}
+
 // Front of a visitor seated on the bench: knees toward us, hands on the lap, shoes hanging below the seat.
 export function sittingVisitorArt(id:Parameters<typeof headArt>[0],blink=false){
   const option=avatarOptions.find(a=>a.id===id)

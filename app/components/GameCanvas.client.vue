@@ -3,7 +3,7 @@ import type { Player, BoardOrder, StoreGame, JukeboxScene } from '../../game/cre
 import type { NeighborhoodGame } from '../../game/neighborhood'
 import type { CatName, CatTaps } from '../../shared/store-mascot'
 import { VIEW_H, viewWidthFor, type Pose, type SceneId } from '../../shared/world'
-const props=defineProps<{scene?:SceneId;daylight?:'day'|'dusk'|'night';nickname:string;avatar:string;players:Player[];selfId:string;board:BoardOrder[];catEnabled?:boolean;guideEnabled?:boolean;controlsEnabled?:boolean;jukebox?:JukeboxScene;menuItems?:string[]|null;catTaps?:CatTaps|null}>()
+const props=defineProps<{scene?:SceneId;storeOpen?:boolean;daylight?:'day'|'dusk'|'night';nickname:string;avatar:string;players:Player[];selfId:string;board:BoardOrder[];catEnabled?:boolean;guideEnabled?:boolean;controlsEnabled?:boolean;jukebox?:JukeboxScene;menuItems?:string[]|null;catTaps?:CatTaps|null}>()
 const emit=defineEmits<{(e:'move',pos:{x:number;y:number}):void;(e:'interact',kind:string):void;(e:'catTap',name:CatName):void;(e:'pose',pose:{pose:Pose;seat?:number}):void;(e:'ready',scene:SceneId):void}>()
 const target=ref<HTMLElement>()
 // Only one scene's game exists at a time: `api` is whichever is running, `store`/`street` the same object when it's that scene.
@@ -50,7 +50,7 @@ async function mountGame(arriving:boolean){
   if(disposed||id!==generation||!target.value)return
   viewWidth=measureView(target.value)
   const options={nickname:props.nickname,avatar:props.avatar as any,onMove:(x:number,y:number)=>emit('move',{x,y}),onInteract:(kind:string)=>emit('interact',kind),reducedMotion:motionQuery?.matches,controlsEnabled:props.controlsEnabled!==false,zoom:renderZoom(target.value,viewWidth),viewWidth,arriving}
-  if('createNeighborhood' in module)api=street=module.createNeighborhood(target.value,{...options,onPose:(pose,seat)=>emit('pose',{pose,seat}),daylight:props.daylight})
+  if('createNeighborhood' in module)api=street=module.createNeighborhood(target.value,{...options,onPose:(pose,seat)=>emit('pose',{pose,seat}),daylight:props.daylight,storeOpen:props.storeOpen!==false})
   else api=store=module.createGame(target.value,{...options,onCatMeow:playCatSound,onCatTap:name=>emit('catTap',name),catEnabled:props.catEnabled,guideEnabled:props.guideEnabled,daylight:props.daylight})
   const created=api
   visibilityChanged()
@@ -80,6 +80,7 @@ watch(()=>props.board,()=>api?.setBoard(props.board),{deep:true})
 watch(()=>props.menuItems,items=>store?.setMenuItems(items??null))
 watch(()=>props.jukebox,state=>{if(state)store?.setJukebox(state)})
 watch(()=>props.catTaps,taps=>{if(taps&&ready)store?.setCatTaps(taps)})
+watch(()=>props.storeOpen,open=>street?.setStoreOpen(open!==false))
 watch(()=>props.controlsEnabled,enabled=>{end();api?.setControlsEnabled(enabled!==false)})
 // Knob travel in CSS pixels; matches the compact pixel joystick ring.
 const JOY_RANGE=24

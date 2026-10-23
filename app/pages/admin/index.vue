@@ -194,7 +194,7 @@ async function onDataReset(options:string[]){
         </dialog>
         <dialog ref="closeStoreConfirmation" class="delivery-confirmation" aria-labelledby="close-store-heading" aria-describedby="close-store-description" @cancel="storeActionBusy&&$event.preventDefault()">
           <h2 id="close-store-heading">Close the store?</h2>
-          <p id="close-store-description">New visitors will not be able to enter. {{ room.members.length ? `The ${room.members.length} visitor${room.members.length===1?'':'s'} currently inside will be disconnected.`:'Anyone already inside will be disconnected.' }} You can reopen the store anytime.</p>
+          <p id="close-store-description">Visitors can still come to the street outside, but the store door stays locked and new orders pause. {{ room.members.length ? `The ${room.members.length} visitor${room.members.length===1?' is':'s are'} online now; anyone inside will be walked out to the street.`:'Anyone inside will be walked out to the street.' }} You can reopen the store anytime.</p>
           <div class="delivery-confirmation-actions"><button type="button" class="btn secondary" autofocus :disabled="storeActionBusy" @click="closeStoreConfirmation?.close()">Cancel</button><button type="button" class="btn" :disabled="storeActionBusy" @click="setStoreAvailability(false)">{{ storeActionBusy?'Closing…':'Close store' }}</button></div>
         </dialog>
         <dialog ref="deliveryConfirmation" class="delivery-confirmation" aria-labelledby="delivery-confirmation-heading" aria-describedby="delivery-confirmation-description" @close="pendingDelivery=null" @cancel="updatingId!==null&&$event.preventDefault()">

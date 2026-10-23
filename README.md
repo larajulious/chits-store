@@ -6,7 +6,7 @@ A cozy multiplayer bakery prototype, built in one **Nuxt + Phaser + SQLite** pro
 
 - **No invitations, order-based authentication, or private customer links.**
 - Public home page lets anyone select a food-inspired avatar and immediately enter.
-- Staff can close or reopen the store from a header button beside Today's menu. Closing stops new entries and returns connected visitors to the closed welcome screen; reopening allows entry again. The open/closed state is stored in SQLite and survives server restarts. The welcome screen shows the status and checks again every 15 seconds.
+- Staff can close or reopen the store from a header button beside Today's menu. While closed, visitors can still visit the street outside but cannot go into the store or order (see Chits Neighborhood below); reopening unlocks the door again. The open/closed state is stored in SQLite and survives server restarts. The welcome screen shows the status and checks again every 15 seconds.
 - The structured pixel layout is the only public layout at `/` and `/store`; no preview query parameter is needed.
 - The welcome-page storefront has subtle pixel animation: warm windows, a gently pulsing sign, a door that occasionally opens, and chimney puffs. When closed, its door stays shut, the windows dim and gently pulse, and small “Z”s drift above the roof. Reduced motion keeps both scenes still.
 - A generated guest nickname (`Mochi #001`, etc.) avoids requiring usernames or accounts.
@@ -37,6 +37,7 @@ A cozy multiplayer bakery prototype, built in one **Nuxt + Phaser + SQLite** pro
 - Outside, a sidewalk chalkboard shows the newest Ready order **number** (never staff-entered names) and how many orders are preparing; the Orders, Menu and Chat → Order inbox actions work from either scene.
 - Both scenes follow the Manila clock (checked every minute): day (6–17), dusk (5–6 and 17–19) and night. Outside, the sky changes and the lamps and shop windows light up after dark; inside, the side windows and the view through the front doors match. Preview with `/store?time=day|dusk|night`.
 - A refresh keeps the visitor in the scene they were in (per browser tab); entering from the welcome page or leaving always starts the next visit inside.
+- When staff close the store, visitors can still come in, but they land on the street: the store shows a CLOSED sign and dark windows, and its door stays locked. Anyone inside is walked out to the street (not disconnected). Chat, emotes, the bench, the vending machine and checking your orders keep working; new orders, order messages and feedback pause until the store reopens. Reopening tells everyone and unlocks the door.
 - The street is a separate lazily loaded chunk and Phaser game; only one scene exists at a time.
 - The game fills the full width of any screen. The view is always 580 world units tall and as wide as the screen's shape (360 on phones, up to 1800 on ultra-wide screens). Inside, the room stays centred against a brick wall; outside, the whole street shows on wide screens, carrying on past both ends to neighbouring houses and fiesta barricades. Resizing or rotating reshapes the running scene without a reload.
 

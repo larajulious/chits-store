@@ -3,7 +3,6 @@ import { isAvatar } from '../../../shared/avatars'
 import { defineEventHandler, createError, setHeader } from 'h3'
 import { db } from '../../utils/db'
 import { setVisitor, verifyOrigin, visitorFromCookie, visitorName, clientAddress } from '../../utils/auth'
-import { requireStoreOpen } from '../../utils/store'
 
 const attempts = new Map<string, { count: number; resetAt: number }>()
 export default defineEventHandler(async event => {
@@ -20,7 +19,7 @@ export default defineEventHandler(async event => {
   const body = await readJsonBody<{ avatar?: string }>(event)
   const avatar = typeof body.avatar==='string'?body.avatar:''
   if (!isAvatar(avatar)) throw createError({ statusCode: 400, statusMessage: 'Choose a valid avatar' })
-  requireStoreOpen()
+  // A closed store still lets visitors in: they land on the street outside (see server/routes/ws.ts).
   const previous = visitorFromCookie(event.node.req.headers.cookie || '')
   let id: number
   if (previous) {

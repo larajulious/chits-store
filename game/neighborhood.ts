@@ -6,8 +6,8 @@ import * as street from './neighborhoodArt'
 import {MAX_VIEW_W,MIN_VIEW_W,BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,NAME_TAG_GAP,PX,TAG_FONT,Tag,addTexture,characterPhase,createReactionTextures,currentDaylight,findPath,isHalloweenSeason,reactionTexture,setDepthIfChanged,slideDoor,tagDepth,tapSparks,visitorFrame,type BoardOrder,type Player,type WorldGame} from './common'
 
 // Chits Neighborhood: the street outside the store. Loaded only when a visitor steps outside, as its own Phaser game.
-export type NeighborhoodGame = WorldGame & {setPose:(id:string,pose:Pose,seat?:number)=>void;setBoard:(orders:BoardOrder[])=>void;vend:()=>void;goInside:()=>void}
-type Options = {nickname:string;avatar:AvatarId;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onPose:(pose:Pose,seat?:number)=>void;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;daylight?:street.Daylight;viewWidth?:number}
+export type NeighborhoodGame = WorldGame & {setPose:(id:string,pose:Pose,seat?:number)=>void;setBoard:(orders:BoardOrder[])=>void;vend:()=>void;goInside:()=>void;setStoreOpen:(open:boolean)=>void}
+type Options = {nickname:string;avatar:AvatarId;onMove:(x:number,y:number)=>void;onInteract:(kind:string)=>void;onPose:(pose:Pose,seat?:number)=>void;reducedMotion?:boolean;controlsEnabled?:boolean;zoom?:number;arriving?:boolean;daylight?:street.Daylight;viewWidth?:number;storeOpen?:boolean}
 // lift: how far the art is drawn above the network position (sitting draws the visitor up on the seat).
 type Visitor = {sprite:Phaser.GameObjects.Image;label:Tag;avatar:string;phase:number;movingUntil:number;bubble?:Tag|Phaser.GameObjects.Image;pose:Pose;seat?:number;sitSince:number;lift:number}
 
@@ -87,9 +87,13 @@ class NeighborhoodScene extends Phaser.Scene{
   private vendUntil=0
   private boardReady?:Phaser.GameObjects.Text
   private boardPrep?:Phaser.GameObjects.Text
-  private shopBubble?:Tag
-  private shopBubbleTimer?:Phaser.Time.TimerEvent
-  private selfBubbleTimer?:Phaser.Time.TimerEvent
+  // One short notice at a time (closed shops, the locked door, a full bench). It stays where it appeared.
+  private notice?:Tag
+  private noticeTimer?:Phaser.Time.TimerEvent
+  // While staff have the store closed: a CLOSED sign on the doors, the lights off, and the door stays locked.
+  private storeOpen=true
+  private closedSign?:Phaser.GameObjects.Container
+  private lightsOff?:Phaser.GameObjects.Graphics
   constructor(opts:Options){super('Neighborhood');this.opts=opts;this.zoom=opts.zoom??1}
   private sprite(x:number,y:number,name:string,depth:number){return this.add.image(x,y,name).setScale(PX).setDepth(depth)}
   // Standing furniture: depth follows the object's base so visitors walk in front and behind.
@@ -120,6 +124,12 @@ class NeighborhoodScene extends Phaser.Scene{
     this.text(600,126,'HUGOT BURGER',10,'#fff8ea',2).setShadow(0,1,'#3b2619',0,false,true)
     for(const x of [120,600])this.text(x,190,'COMING SOON',8,'#5e3d27',2)
     this.door=this.sprite(DOOR.x,DOOR.y,this.opts.arriving?'shop-door-3':'shop-door-0',1)
+    // Darkened windows and door glass, and the sign, shown only while the store is closed.
+    this.lightsOff=this.add.graphics().setDepth(1.5).fillStyle(0x2f2a33,.55)
+    for(const x of STORE_WINDOWS)this.lightsOff.fillRect(x-36,146,72,76)
+    this.lightsOff.fillRect(344,166,12,64).fillRect(364,166,12,64)
+    this.closedSign=this.add.container(DOOR.x,184,[this.add.image(0,0,'closed-sign').setScale(PX),this.add.text(0,5,'CLOSED',{fontFamily:FONT,fontSize:'8px',color:'#ad513f',resolution:this.zoom}).setOrigin(.5)]).setDepth(1.6)
+    this.setStoreOpen(this.opts.storeOpen!==false)
     this.floorSprite(BENCH.x,BENCH.y,'bench')
     this.vending=this.floorSprite(VENDING.x,VENDING.y,'vending-idle')
     this.text(VENDING.x-4,VENDING.y-31,'COLD',8,'#ad513f',this.vending.depth+1)
@@ -182,7 +192,7 @@ class NeighborhoodScene extends Phaser.Scene{
     texture('lamp-off',street.lampArt(false));texture('lamp-on',street.lampArt(true))
     texture('lamp-glow',street.glowArt(18,'#ffd98a'));texture('window-glow',street.glowArt(22,'#ffcf7a'));texture('light-pool',street.lightPoolArt())
     texture('tree-0',street.treeArt(0));texture('tree-1',street.treeArt(1))
-    texture('planter',street.planterArt());texture('leaf',street.leafArt());texture('can',street.canArt())
+    texture('planter',street.planterArt());texture('closed-sign',street.closedSignArt());texture('leaf',street.leafArt());texture('can',street.canArt())
     texture('plant-small',art.smallPlantArt());texture('sparkle',art.sparkleArt());texture('head-palitaw',art.headArt('palitaw'))
     if(HALLOWEEN)texture('pumpkin-glow',art.pumpkinArt('glow'))
     createReactionTextures(this)
@@ -192,13 +202,14 @@ class NeighborhoodScene extends Phaser.Scene{
     this.sky?.setTexture(`sky-${this.daylight}`)
     for(const cloud of this.clouds)cloud.setVisible(this.daylight!=='night').setAlpha(this.daylight==='dusk'?.75:1)
     this.shade?.setFillStyle(color,alpha).setVisible(alpha>0)
-    for(const glow of this.windowGlows)glow.setVisible(this.daylight!=='day')
+    // The store's own two windows stay dark at night while it is closed; the houses' windows still glow.
+    this.windowGlows.forEach((glow,i)=>glow.setVisible(this.daylight!=='day'&&(this.storeOpen||i>=STORE_WINDOWS.length)))
   }
   private tap(x:number,y:number){
     if(this.inputBlocked())return
     const spark=()=>{if(!this.opts.reducedMotion)tapSparks(this,x,y)}
     const interact=(tx:number,ty:number,kind:string)=>{spark();this.walkTo(tx,ty,()=>this.opts.onInteract(kind))}
-    if(Math.abs(x-DOOR.x)<=22&&y>=156&&y<=256){interact(DOOR.x,DOOR.standY,'store');return}
+    if(Math.abs(x-DOOR.x)<=22&&y>=156&&y<=256){spark();this.walkTo(DOOR.x,DOOR.standY,()=>this.enterStore());return}
     if(Math.abs(x-VENDING.x)<=24&&y>=196&&y<=284){interact(VENDING.standX,VENDING.standY,'vending');return}
     if(Math.abs(x-BENCH.x)<=36&&y>=256&&y<=302){spark();this.chooseSeat(x);return}
     if(Math.abs(x-ORDER_BOARD.x)<=28&&y>=252&&y<=306){interact(ORDER_BOARD.standX,ORDER_BOARD.standY,'board');return}
@@ -245,21 +256,18 @@ class NeighborhoodScene extends Phaser.Scene{
     if(!sprite||Math.hypot(sprite.x-this.lastX,sprite.y-this.lastY)<=.5)return
     this.lastMove=this.time.now;this.lastX=sprite.x;this.lastY=sprite.y;this.opts.onMove(Math.round(sprite.x),Math.round(sprite.y))
   }
-  // A quick line above the visitor's own head, e.g. when the bench is full.
+  private noticeAt(x:number,y:number,text:string,ms:number,wrap=150){
+    this.noticeTimer?.remove(false);this.notice?.destroy()
+    const bubble=this.tag(x,y,text,TAG_FONT,wrap).setDepth(900)
+    this.notice=bubble
+    this.noticeTimer=this.time.delayedCall(ms,()=>{if(this.notice===bubble)this.notice=undefined;bubble.destroy();this.noticeTimer=undefined})
+  }
+  // A quick line just above where the visitor is standing (e.g. the bench is full); it doesn't follow them.
   private say(text:string){
     const self=this.self
-    if(!self)return
-    self.bubble?.destroy();this.selfBubbleTimer?.remove(false)
-    const bubble=this.tag(self.sprite.x,self.sprite.y-self.lift-BUBBLE_GAP,text,TAG_FONT,140).setDepth(900)
-    self.bubble=bubble
-    this.selfBubbleTimer=this.time.delayedCall(2200,()=>{if(self.bubble===bubble)self.bubble=undefined;bubble.destroy()})
+    if(self)this.noticeAt(self.sprite.x,self.sprite.y-self.lift-BUBBLE_GAP,text,2200,140)
   }
-  private shopSpeak(shop:typeof SHOPS[number]){
-    this.shopBubbleTimer?.remove(false);this.shopBubble?.destroy()
-    const bubble=this.tag(shop.x,shop.y,shop.lines[Math.floor(Math.random()*shop.lines.length)]!,TAG_FONT,150).setDepth(900)
-    this.shopBubble=bubble
-    this.shopBubbleTimer=this.time.delayedCall(3200,()=>{if(this.shopBubble===bubble)this.shopBubble=undefined;bubble.destroy();this.shopBubbleTimer=undefined})
-  }
+  private shopSpeak(shop:typeof SHOPS[number]){this.noticeAt(shop.x,shop.y,shop.lines[Math.floor(Math.random()*shop.lines.length)]!,3200)}
   // The canopy shakes a few times and one leaf drifts down.
   private rustle(tree:typeof this.trees[number]){
     if(this.time.now<tree.rustleUntil)return
@@ -295,8 +303,23 @@ class NeighborhoodScene extends Phaser.Scene{
   }
   // The page's "Go inside" button: walk to the door and go in, as if the door had been tapped.
   goInside(){
-    this.walkTo(DOOR.x,DOOR.standY,()=>this.opts.onInteract('store'))
-    if(!this.inputBlocked()&&!this.path.length&&this.afterPath){this.afterPath=undefined;this.opts.onInteract('store')}
+    this.walkTo(DOOR.x,DOOR.standY,()=>this.enterStore())
+    if(!this.inputBlocked()&&!this.path.length&&this.afterPath){this.afterPath=undefined;this.enterStore()}
+  }
+  // At the door: in we go, unless the store is closed, when the locked door rattles and the visitor says so.
+  private enterStore(){
+    if(this.storeOpen){this.opts.onInteract('store');return}
+    // The closed store answers from its door, above the CLOSED sign.
+    this.noticeAt(DOOR.x,162,"Sorry, we're closed! Come back soon.",2600)
+    const door=this.door
+    if(!door||this.opts.reducedMotion)return
+    this.tweens.killTweensOf(door);door.setX(DOOR.x)
+    this.tweens.add({targets:door,x:DOOR.x+PX/2,duration:50,yoyo:true,repeat:3,onComplete:()=>door.setX(DOOR.x)})
+  }
+  setStoreOpen(open:boolean){
+    this.storeOpen=open
+    this.closedSign?.setVisible(!open);this.lightsOff?.setVisible(!open)
+    this.applyDaylight()
   }
   setDirection(x:number,y:number){if(this.inputBlocked()){this.resetMovement();return}this.direction.set(x,y);if(x||y){this.path=[];this.afterPath=undefined}}
   private inputBlocked(){
@@ -381,7 +404,7 @@ class NeighborhoodScene extends Phaser.Scene{
     if(sprite.y>DOOR.triggerY+16)this.doorTriggered=false
     const pushing=pushY<-.5&&sprite.y<=DOOR.triggerY&&Math.abs(sprite.x-DOOR.x)<=DOOR.halfWidth
     this.doorPush=pushing?this.doorPush+delta:0
-    if(this.doorPush>=DOOR.pushMs&&!this.doorTriggered&&this.time.now>=this.doorReadyAt){this.doorTriggered=true;this.opts.onInteract('store')}
+    if(this.doorPush>=DOOR.pushMs&&!this.doorTriggered&&this.time.now>=this.doorReadyAt){this.doorTriggered=true;this.enterStore()}
   }
   exitScene(){
     return new Promise<void>(resolve=>{
@@ -487,7 +510,6 @@ class NeighborhoodScene extends Phaser.Scene{
   showBubble(id:string,text:string){
     const target=id===this.selfId?this.self:this.remotes.get(id)
     if(!target)return
-    if(target===this.self)this.selfBubbleTimer?.remove(false)
     target.bubble?.destroy()
     const bubble=this.makeBubble(target,text)
     target.bubble=bubble
@@ -505,5 +527,5 @@ export function createNeighborhood(el:HTMLElement,opts:Options):NeighborhoodGame
   return {game,setDirection:(x,y)=>scene.setDirection(x,y),setPlayers:(players,id)=>{if(active())scene.setPlayers(players,id)},movePlayer:(id,x,y)=>{if(active())scene.movePlayer(id,x,y)},
     showBubble:(id,text)=>{if(active())scene.showBubble(id,text)},setReducedMotion:value=>{if(active())scene.setReducedMotion(value)},setControlsEnabled:value=>scene.setControlsEnabled(value),
     exitScene:()=>active()?scene.exitScene():Promise.resolve(),cancelExit:()=>{if(active())scene.cancelExit()},setViewWidth:width=>scene.setViewWidth(width),
-    setPose:(id,pose,seat)=>{if(active())scene.setPose(id,pose,seat)},setBoard:orders=>{if(active())scene.setBoard(orders)},vend:()=>{if(active())scene.vend()},goInside:()=>{if(active())scene.goInside()}}
+    setPose:(id,pose,seat)=>{if(active())scene.setPose(id,pose,seat)},setBoard:orders=>{if(active())scene.setBoard(orders)},vend:()=>{if(active())scene.vend()},goInside:()=>{if(active())scene.goInside()},setStoreOpen:open=>{if(active())scene.setStoreOpen(open)}}
 }

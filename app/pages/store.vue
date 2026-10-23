@@ -19,7 +19,7 @@ const guideEnabled=computed(()=>String(featureConfig.storeGuideEnabled)!=='false
 type Status = OrderStatus
 type PublicOrder = { id:number; number:string; name:string|null; status:Status }
 type MenuState = { date:string; version:string; items:{id:number;name:string;priceCentavos:number}[] }
-type Me = { nickname:string; avatar:string }
+type Me = { nickname:string; avatar:string; storeOpen?:boolean }
 const me=ref<Me|null>(null), board=ref<PublicOrder[]>([]), players=ref<Player[]>([]), selfId=ref('')
 const menu=ref<MenuState>({date:'',version:'',items:[]}),menuLoading=ref(false),menuError=ref('')
 const cart=ref<Record<number,number>>({}),placingOrder=ref(false),checkoutError=ref('')
@@ -40,6 +40,9 @@ const guideMenuItems=ref<string[]|null>(null)
 const visitorAvatar=computed(()=>isAvatar(me.value?.avatar)?me.value.avatar:'mochi')
 // scene: what this tab shows. serverScene: where the server has the visitor; the two differ only while walking through a door.
 const scene=ref<SceneId>(readVisitScene()),serverScene=ref<SceneId>(scene.value),transitioning=ref(false)
+// When staff close the store, visitors can still come and hang out on the street; the door stays locked and ordering pauses.
+const storeOpen=ref(true)
+const closedNotice='Chits Store is closed right now, but the street is open. Hang out, chat and come back soon!'
 // players only lists the visitor's own scene; the header counts everyone in the store and on the street.
 const onlineTotal=ref<number|null>(null)
 const online=computed(()=>onlineTotal.value??players.value.length)
@@ -80,7 +83,7 @@ watch(overlay,value=>{
 onMounted(async()=>{
   document.addEventListener('visibilitychange',onVisibilityChanged)
   scheduleNextMenuDay()
-  try { me.value=await $fetch<Me>('/api/me');if(alive)setupMusic();void loadMenu();await Promise.all([loadBoard(),loadOrderInbox()]);if(alive){connect();boardRefresh=setInterval(()=>void loadBoard(),30_000);inboxTimer=setInterval(()=>void pollOrderInbox(),3000)} }
+  try { const profile=await $fetch<Me>('/api/me');if(profile.storeOpen===false){storeOpen.value=false;if(scene.value==='store'){scene.value=serverScene.value='outside';saveVisitScene('outside')}notice.value=closedNotice};me.value=profile;if(alive)setupMusic();void loadMenu();await Promise.all([loadBoard(),loadOrderInbox()]);if(alive){connect();boardRefresh=setInterval(()=>void loadBoard(),30_000);inboxTimer=setInterval(()=>void pollOrderInbox(),3000)} }
   catch { void returnHome() }
 })
 onBeforeUnmount(()=>{alive=false;sceneWait?.(false);clearTimeout(sceneReadyTimer);document.removeEventListener('visibilitychange',onVisibilityChanged);stopMusic();clearInterval(jukeboxClockTimer);clearTimeout(jukeboxVoteTimeout);clearTimeout(reconnect);clearInterval(heartbeat);clearInterval(boardRefresh);clearInterval(inboxTimer);clearTimeout(menuDayTimer);socket?.close()})
@@ -126,6 +129,7 @@ async function loadBoard(){try{board.value=await $fetch<PublicOrder[]>('/api/ord
 function money(cents:number){return `₱${(cents/100).toFixed(2)}`}
 function changeQuantity(id:number,amount:number){const next=Math.max(0,Math.min(20,(cart.value[id]||0)+amount));cart.value={...cart.value,[id]:next};checkoutError.value=''}
 function openCheckoutConfirmation(){
+  if(!storeOpen.value)return
   if(placingOrder.value||menuLoading.value||!cartLines.value.length||!hasCurrentMenu.value)return
   checkoutError.value=''
   checkoutDialog.value?.showModal()
@@ -248,6 +252,7 @@ function connect(){
     if(data.type==='welcome'){
       connected.value=true;selfId.value=data.selfId;players.value=data.players||[];chatEnabled.value=data.chatEnabled!==false
       onlineTotal.value=typeof data.online==='number'?data.online:null
+      if(typeof data.storeOpen==='boolean')storeOpen.value=data.storeOpen
       serverScene.value=isScene(data.scene)?data.scene:'store'
       if(serverScene.value!==scene.value)enterScene(serverScene.value)
       if(hasWelcomed){menuStale=true;menuEpoch++;if(!document.hidden)void loadMenu(true)}
@@ -260,7 +265,13 @@ function connect(){
       serverScene.value=data.scene;players.value=data.players||[];if(typeof data.online==='number')onlineTotal.value=data.online
       if(sceneWait)sceneWait(true);else if(data.scene!==scene.value)enterScene(data.scene)
     }
-    if(data.type==='scene_rejected'){if(isScene(data.scene))serverScene.value=data.scene;sceneWait?.(false)}
+    if(data.type==='scene_rejected'){if(isScene(data.scene))serverScene.value=data.scene;if(data.reason==='closed'){storeOpen.value=false;notice.value=closedNotice}sceneWait?.(false)}
+    // Staff opened or closed the store. Closing also walks anyone inside out to the street (a scene_changed).
+    if(data.type==='store_status'&&typeof data.open==='boolean'&&data.open!==storeOpen.value){
+      storeOpen.value=data.open
+      notice.value=data.open?'Chits Store is open again. Come on in!':closedNotice
+      if(!data.open)checkoutDialog.value?.close()
+    }
     if(data.type==='player_moved'){
       const found=players.value.find(p=>p.id===data.id)
       if(found&&found.id!==selfId.value&&Number.isFinite(data.x)&&Number.isFinite(data.y)){
@@ -341,6 +352,7 @@ function interact(kind:string){
 // other scene is built and fades in. One request at a time; a refusal or timeout closes the door again.
 async function changeScene(target:SceneId){
   if(transitioning.value||target===scene.value||returningHome.value||leaving.value)return
+  if(target==='store'&&!storeOpen.value){notice.value=closedNotice;return}
   if(!connected.value){notice.value='Reconnecting… please try the door again in a moment.';return}
   transitioning.value=true;transitionPlayers=players.value
   const confirmed=new Promise<boolean>(resolve=>{
@@ -353,7 +365,7 @@ async function changeScene(target:SceneId){
   const opened=Promise.race([game.value?.exitScene()??Promise.resolve(),new Promise(resolve=>setTimeout(resolve,1500))])
   const [ok]=await Promise.all([confirmed,opened])
   if(!alive||returningHome.value)return
-  if(!ok){transitionPlayers=[];game.value?.cancelExit();transitioning.value=false;if(connected.value)notice.value='The door is stuck. Please try again.';return}
+  if(!ok){transitionPlayers=[];game.value?.cancelExit();transitioning.value=false;if(connected.value&&storeOpen.value)notice.value='The door is stuck. Please try again.';return}
   enterScene(target)
 }
 function enterScene(target:SceneId){
@@ -381,7 +393,7 @@ async function leave(){
   <template v-if="me&&!returningHome">
     <div class="game-stage">
       <aside v-if="notice" class="structured-notice" role="status"><strong>{{ notice }}</strong><button type="button" aria-label="Dismiss notice" @click="notice=''">✕</button></aside>
-      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :scene="scene" :daylight="daylight" :nickname="me.nickname" :avatar="me.avatar" :players="scenePlayers" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving&&!transitioning" :jukebox="jukeboxScene" :menu-items="guideMenuItems" :cat-taps="catTaps" @move="p=>{if(serverScene===scene)send({type:'move',x:p.x,y:p.y})}" @cat-tap="(name:CatName)=>send({type:'cat_tap',name})" @interact="interact" @pose="sendPose" @ready="onSceneReady"/></ClientOnly>
+      <ClientOnly><GameCanvas :key="`${catEnabled}-${guideEnabled}`" ref="game" :scene="scene" :store-open="storeOpen" :daylight="daylight" :nickname="me.nickname" :avatar="me.avatar" :players="scenePlayers" :self-id="selfId" :board="board" :cat-enabled="catEnabled" :guide-enabled="guideEnabled" :controls-enabled="!overlay&&!leaving&&!transitioning" :jukebox="jukeboxScene" :menu-items="guideMenuItems" :cat-taps="catTaps" @move="p=>{if(serverScene===scene)send({type:'move',x:p.x,y:p.y})}" @cat-tap="(name:CatName)=>send({type:'cat_tap',name})" @interact="interact" @pose="sendPose" @ready="onSceneReady"/></ClientOnly>
     </div>
     <button v-if="featuredOrder" type="button" class="order-inbox-shortcut" :class="{'has-reply':privateUnread>0}" :aria-label="privateUnread?`Order inbox, ${privateUnread} unread staff ${privateUnread===1?'reply':'replies'}. Open order ${featuredOrder.number}`:`Open order inbox for order ${featuredOrder.number}`" @click="openOrderInbox(featuredOrder.id)"><span class="order-inbox-shortcut-icon"><StoreGlyph name="chat"/><span v-if="privateUnread" class="order-inbox-shortcut-count" aria-hidden="true">{{ privateUnread>9?'9+':privateUnread }}</span></span><span class="order-inbox-shortcut-copy"><strong>{{ privateUnread?'New reply from staff':'Your order inbox' }}</strong><small>Order #{{ featuredOrder.number }}{{ featuredOrder.name?` · ${featuredOrder.name}`:'' }} · {{ orderStatusLabels[featuredOrder.status] }}</small></span><span class="order-inbox-shortcut-action">{{ privateUnread?'Read reply':'Open inbox' }} →</span></button>
     <nav class="structured-actions" aria-label="Store actions">
@@ -392,7 +404,7 @@ async function leave(){
       <button type="button" @click="overlay='feedback'"><StoreGlyph name="pencil"/><span>Feedback</span></button>
       <button type="button" @click="leaveDialog?.open()"><StoreGlyph name="door"/><span>Leave</span></button>
     </nav>
-    <div v-if="scene==='outside'" class="structured-hint"><p class="cat-hint-copy"><span>Sit on the bench · try the vending machine</span></p><button type="button" class="cat-action go-inside" aria-label="Walk back into Chits Store" :disabled="!!overlay||transitioning" @click="game?.goInside()"><StoreGlyph name="door"/>Go inside</button></div>
+    <div v-if="scene==='outside'" class="structured-hint"><p class="cat-hint-copy"><span>{{ storeOpen?'Sit on the bench · try the vending machine':'The store is closed for now · hang out on the street' }}</span></p><button type="button" class="cat-action go-inside" :aria-label="storeOpen?'Walk back into Chits Store':'Chits Store is closed'" :disabled="!!overlay||transitioning||!storeOpen" @click="game?.goInside()"><StoreGlyph name="door"/>{{ storeOpen?'Go inside':'Closed' }}</button></div>
     <div v-else-if="catEnabled" class="structured-hint"><p class="cat-hint-copy"><span class="cat-hint-faces"><PixelSprite name="cat-face" :scale="2"/><PixelSprite name="onay-face" :scale="2"/></span><span>Drag yarn · tap Miming or Onay to pet</span></p><button type="button" class="cat-action toss-yarn" aria-label="Toss yarn for Miming and Onay, the shop cats" :disabled="!!overlay" @click="game?.tossYarn()"><StoreGlyph name="yarn"/>Toss yarn</button></div>
     <div v-if="overlay" class="overlay-shade" :class="{'chat-overlay':overlay==='chat'||overlay==='jukebox'}" @click.self="overlay=''">
       <section class="overlay-panel stack store-dialog" :class="{'feedback-dialog':overlay==='feedback','chat-dialog':overlay==='chat','jukebox-dialog':overlay==='jukebox','order-chat-dialog':overlay==='chat'&&chatTab==='orders'&&!!selectedOrderId}" role="dialog" aria-labelledby="store-dialog-title">
@@ -406,7 +418,8 @@ async function leave(){
           <p v-else-if="!hasCurrentMenu&&menuError" class="menu-message" role="alert">{{ menuError }}</p>
           <p v-else-if="!hasCurrentMenu||!menu.items.length" class="menu-message">Today’s menu hasn’t been posted yet. Please check back soon!</p>
           <ul v-else class="visitor-menu"><li v-for="item in menu.items" :key="item.id"><div class="menu-item-label"><span>{{ item.name }}</span><strong>{{ money(item.priceCentavos) }}</strong></div><div class="menu-quantity"><button type="button" :aria-label="`Remove one ${item.name}`" :disabled="!cart[item.id]||placingOrder" @click="changeQuantity(item.id,-1)">−</button><span :aria-label="`${cart[item.id]||0} in cart`">{{ cart[item.id]||0 }}</span><button type="button" :aria-label="`Add one ${item.name}`" :disabled="(cart[item.id]||0)>=20||placingOrder" @click="changeQuantity(item.id,1)">+</button></div></li></ul>
-          <div v-if="cartLines.length" class="cart-summary"><strong>Your cart</strong><div v-for="item in cartLines" :key="item.id"><span>{{ item.quantity }} × {{ item.name }}</span><span>{{ money(item.lineTotalCentavos) }}</span></div><div class="cart-total"><strong>Total</strong><strong>{{ money(cartTotal) }}</strong></div><p class="privacy">Staff will confirm your request before preparing it.</p><button type="button" class="btn" :disabled="placingOrder||menuLoading||!hasCurrentMenu" @click="openCheckoutConfirmation">Send order request</button></div>
+          <p v-if="!storeOpen" class="menu-message" role="status">The store is closed right now, so new orders are paused. You can still browse today’s menu.</p>
+          <div v-if="cartLines.length" class="cart-summary"><strong>Your cart</strong><div v-for="item in cartLines" :key="item.id"><span>{{ item.quantity }} × {{ item.name }}</span><span>{{ money(item.lineTotalCentavos) }}</span></div><div class="cart-total"><strong>Total</strong><strong>{{ money(cartTotal) }}</strong></div><p class="privacy">Staff will confirm your request before preparing it.</p><button type="button" class="btn" :disabled="placingOrder||menuLoading||!hasCurrentMenu||!storeOpen" @click="openCheckoutConfirmation">{{ storeOpen?'Send order request':'Orders paused while closed' }}</button></div>
           <p v-if="checkoutError" class="error" role="alert">{{ checkoutError }}</p>
           <p v-if="hasCurrentMenu&&menuLoading" class="menu-message">Updating today’s menu…</p>
           <p v-if="hasCurrentMenu&&menuError" class="menu-message" role="alert">{{ menuError }}</p>

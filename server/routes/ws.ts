@@ -10,7 +10,6 @@ export default defineWebSocketHandler({
   upgrade(request){
     if(!allowedOrigin(request.headers.get('origin'),request.headers.get('host')))return new Response('Invalid request origin',{status:403})
     if(!visitorSessionFromCookie(request.headers.get('cookie')||''))return new Response('Choose an avatar',{status:401})
-    if(!isStoreOpen())return new Response('Store is closed',{status:503})
   },
   open(peer) {
     const request = peer.request
@@ -21,10 +20,11 @@ export default defineWebSocketHandler({
     const session=visitorSessionFromCookie(request?.headers.get('cookie')||'')
     const visitor=session?.visitor
     if (!visitor) { peer.send(JSON.stringify({type:'choose_avatar'})); peer.close(); return }
-    if(!isStoreOpen()){peer.send(JSON.stringify({type:'store_closed'}));peer.close();return}
     // A refresh or reconnect keeps the visitor in the scene they were in (/ws?scene=outside); new visits start inside.
+    // While the store is closed everyone lands on the street.
     let scene:SceneId='store'
     try{const wanted=new URL(request?.url||'/ws','http://localhost').searchParams.get('scene');if(isScene(wanted))scene=wanted}catch{}
+    if(!isStoreOpen())scene='outside'
     const {x,y}=scenes[scene].spawn
     joinRoom({ id:peer.id, visitorId:visitor.id, expiresAt:session!.expiresAt, nickname:visitorName(visitor), avatar:visitor.avatar_key,
       scene, x, y, pose:'stand', seat:null, lastSceneChange:0, lastMove:Date.now(), lastChat:0, chatWindowStart:Date.now(), chatCount:0,
@@ -36,7 +36,6 @@ export default defineWebSocketHandler({
     }
   },
   message(peer, message) {
-    if(!isStoreOpen()){peer.send(JSON.stringify({type:'store_closed'}));leaveRoom(peer.id);peer.close();return}
     const p = findMember(peer.id)
     if (!p || !authorized(p)) { peer.send(JSON.stringify({type:'choose_avatar'}));leaveRoom(peer.id);peer.close();return }
     const now=Date.now(),rate=peer.context.rate as {at:number;count:number}|undefined

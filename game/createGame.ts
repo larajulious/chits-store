@@ -33,12 +33,16 @@ const NAME_TAG_GAP=28,BUBBLE_GAP=54,TAG_FONT=10,TAG_PAD_Y=4
 const tagDepth=(y:number)=>600+y/10
 const obstructions=storeObstacles.map(box=>new Phaser.Geom.Rectangle(box.x,box.y,box.w,box.h))
 const feedbackArea=obstructions[0]!
+// The sign advertising custom and mobile app development stands between the jukebox and the feedback board;
+// tapping it walks the visitor to its left side and opens the ad.
+const AD_SIGN={x:322,y:372,standX:280,standY:380}
+const adSignArea=obstructions[2]!
 // The guide's loop keeps clear of Miming's spot by the yarn and Onay's spot by the feedback board.
 // Back-right corner beside the order counter, above the walkable floor (y 260+), so it never blocks movement.
 const JUKEBOX={x:328,y:227,standX:320,standY:300,depth:256}
 // What the walking menu guide says now and then. Item lines use real names from today's menu;
 // before the menu is posted the guide only says it's on the way.
-const GUIDE_LINES=["Have you checked today's menu?",'Meryenda time! Tap me for the menu.',"Hungry? Today's menu is ready!",'Psst... tap me to see the menu!','Gutom ka na? Check the menu!','Something sweet is on the menu today!','Fresh meryenda today. Come see!','Psst... hop on the dance floor!']
+const GUIDE_LINES=["Have you checked today's menu?",'Meryenda time! Tap me for the menu.',"Hungry? Today's menu is ready!",'Psst... tap me to see the menu!','Gutom ka na? Check the menu!','Something sweet is on the menu today!','Fresh meryenda today. Come see!','Psst... hop on the dance floor!','Need an app built? Tap the sign!']
 const GUIDE_ITEM_LINES=['Try the {item} today!',"{item} is on today's menu!",'Have you tried our {item}?','Craving {item}? Tap me!','Fresh {item}, just for you!']
 const HALLOWEEN_GUIDE_LINES=['Happy Halloween! Treat yourself to meryenda.','Trick or treat? Tap me for the menu!','Psst... try tapping the pumpkins!']
 const HALLOWEEN_LINES={carved:['Boo!','Hehehe!','Boo! Did I scare you?'],plain:['Trick or treat!','Here, have a treat!'],bat:['Squeak!','Eek!']}
@@ -201,6 +205,7 @@ class StoreScene extends Phaser.Scene {
   private bats:{sprite:Phaser.GameObjects.Image;x:number;y:number;inward:1|-1;flyingSince:number}[]=[]
   private decorBubble?:Tag
   private decorBubbleTimer?:Phaser.Time.TimerEvent
+  private adSign?:Phaser.GameObjects.Image
   private danceFloor?:Phaser.GameObjects.Image
   private dancers:{sprite:Phaser.GameObjects.Image;id:art.DancerId;y:number;mirror:boolean;twirlUntil:number}[]=[]
   private cheerBubble?:Tag
@@ -258,6 +263,9 @@ class StoreScene extends Phaser.Scene {
     const board=floor(324,492,'feedback-board')
     this.text(324,465,'FEEDBACK',8,'#5e3d27',board.depth+1)
     this.text(324,509,'WRITE',8,'#5e3d27',board.depth+1)
+    this.adSign=floor(AD_SIGN.x,AD_SIGN.y,'ad-sign')
+    this.text(AD_SIGN.x,AD_SIGN.y-30,'APPS',8,'#5e3d27',this.adSign.depth+1)
+    this.text(AD_SIGN.x,AD_SIGN.y+18,'ASK US',8,'#5e3d27',this.adSign.depth+1)
     // Tile-repair corner: a handyman taps a fresh tile into place beside his toolbox.
     this.sprite(110,410,'repair-tile',1);this.sprite(136,418,'old-tile',2)
     floor(54,410,'toolbox');floor(140,388,'cone')
@@ -341,6 +349,7 @@ class StoreScene extends Phaser.Scene {
       if(x<190&&y<200){interact(93,273,'chef');return}
       if(y<256&&x>=60&&x<=304){interact(177,273,'cashier');return}
       if(feedbackArea.contains(x,y)){interact(260,500,'feedback');return}
+      if(adSignArea.contains(x,y)){interact(AD_SIGN.standX,AD_SIGN.standY,'services');return}
       if(y>=548&&x>=126&&x<=234){interact(180,540,'leave');return}
       const p=closestPoint(x,y);this.tapFeedback(p.x,p.y);this.walkTo(p.x,p.y)
     })
@@ -361,6 +370,7 @@ class StoreScene extends Phaser.Scene {
     for(const frame of ['up','down','rest'] as const)this.texture(`fixer-${frame}`,art.fixerArt(frame))
     this.texture('toolbox',art.toolboxArt());this.texture('cone',art.coneArt());this.texture('repair-tile',art.repairTileArt());this.texture('old-tile',art.oldTileArt())
     this.texture('feedback-board',art.feedbackBoardArt());this.texture('entrance',art.entranceArt())
+    this.texture('ad-sign',art.adSignArt());this.texture('ad-sign-ping',art.adSignArt(true))
     this.texture('jukebox-idle',art.jukeboxArt('idle'));for(const frame of [0,1,2,3] as const)this.texture(`jukebox-${frame}`,art.jukeboxArt(frame))
     this.texture('music-note',art.musicNoteArt())
     for(const {id} of DANCERS)for(const pose of DANCE_POSES)this.texture(`dancer-${id}-${pose}`,art.dancerArt(id,pose))
@@ -757,6 +767,13 @@ class StoreScene extends Phaser.Scene {
   }
   // One pose per beat with a one-pixel hop on 'up' and 'clap'; the beat quickens while the jukebox plays.
   // A twirl is fast facing flips with a higher hop. Under reduced motion both hold still and the floor stays lit.
+  // The phone on the app sign blinks a notification dot; under reduced motion the dot stays lit.
+  private updateAdSign(){
+    const sign=this.adSign
+    if(!sign)return
+    const texture=this.opts.reducedMotion||this.time.now%2400<1200?'ad-sign-ping':'ad-sign'
+    if(sign.texture.key!==texture)sign.setTexture(texture)
+  }
   // Performers and visitors share this beat, so everyone on the floor moves together.
   private danceBeat(){return this.jukeboxState.playing?240:340}
   private danceStep(){return DANCE_STEPS[this.opts.reducedMotion?0:Math.floor(this.time.now/this.danceBeat())%DANCE_STEPS.length]!}
@@ -818,6 +835,7 @@ class StoreScene extends Phaser.Scene {
     this.updateJukebox()
     this.updateHalloween()
     this.updateDancers()
+    this.updateAdSign()
     for(const character of this.staff)this.animateCharacter(character,false)
     this.updateChefCooking()
     for(const character of this.remotes.values())this.animateCharacter(character,this.time.now<character.movingUntil)

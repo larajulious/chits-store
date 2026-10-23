@@ -45,6 +45,10 @@ test('visitor checkout and private order messages are priced and authorized on t
   assert.equal((await request('/api/orders/board').then(r=>r.json())).some(order=>order.id===id),false)
   assert.equal((await request('/api/admin/orders',{cookie:staff}).then(r=>r.json()))[0].status,'Pending')
   assert.deepEqual(detail.items.map(({name,quantity,lineTotalCentavos})=>({name,quantity,lineTotalCentavos})),[{name:'Biko',quantity:2,lineTotalCentavos:7000}])
+  // The store replies at once asking for the delivery address; it arrives already read for the customer.
+  assert.deepEqual(detail.messages.map(message=>message.role),['system','staff'])
+  assert.match(detail.messages[1].text,/delivery address/)
+  assert.equal((await request('/api/orders/mine',{cookie:a}).then(r=>r.json()))[0].unread,0)
   assert.equal((await request('/api/orders/mine',{cookie:a}).then(r=>r.json())).length,1)
   assert.deepEqual(await request('/api/orders/mine',{cookie:b}).then(r=>r.json()),[])
   assert.equal((await request(`/api/orders/${id}`,{cookie:b})).status,404)

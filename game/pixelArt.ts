@@ -413,6 +413,21 @@ export function feedbackBoardArt(){
   return art.shadow(18,45,15,1.2)
 }
 
+// An A-frame sign advertising the store's custom and mobile app development: a phone and a code
+// tag on a cream poster, with a button strip for the scene's "ASK US" text. 'ping' lights a
+// notification dot on the phone so the sign catches the eye now and then.
+export function adSignArt(ping=false){
+  const art=new PixelArt(32,42)
+  art.rect(4,34,3,7,WOOD_DARK).rect(25,34,3,7,WOOD_DARK)
+  art.box(0,0,32,36,WOOD,INK).box(2,2,28,32,'#f6e2bc','#c9a578').rect(3,3,26,1,'#fff1d6')
+  art.box(6,10,9,15,'#3b3d44',INK).rect(7,12,7,10,'#7cc4e8').rect(8,13,3,1,'#bfe6f5').rect(9,23,3,1,'#9aa0a6')
+  if(ping)art.rect(13,9,3,3,'#ef6b57').set(13,9,'#ffb3a6')
+  art.grid(17,13,['......c....','..c...c.c..','.c...c...c.','c....c....c','.c...c...c.','..c.c...c..','....c......'],{c:'#8b5cc4'})
+  art.box(5,27,22,7,'#fbefd6','#8a6446').rect(6,32,20,1,'#e6cfa6')
+  art.rect(3,41,5,1,INK).rect(24,41,5,1,INK)
+  return art.shadow(16,41,14,1.2)
+}
+
 export function entranceArt(){
   const art=new PixelArt(60,16)
   art.rect(0,9,60,7,'#7b5236').rect(0,9,60,1,'#94643f')

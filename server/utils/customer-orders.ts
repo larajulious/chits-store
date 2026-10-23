@@ -9,6 +9,9 @@ type MessageRow = { id:number; order_id:number; role:'visitor'|'staff'|'system';
 type CustomerOrderRow = { order_id:number; visitor_id:number; service_date:string; total_centavos:number; confirmed_at:number|null; staff_read_message_id:number; visitor_read_message_id:number; created_at:number }
 type InboxRow = CustomerOrderRow & OrderRow & { visitor_avatar_key:string|null; last_message:string|null; unread:number }
 
+// Sent from the store as soon as an order is placed, so the customer can share the address while staff are on their way.
+export const ORDER_AUTO_REPLY='Thank you so much for your order! May we kindly ask for your delivery address? One of our staff members will be with you shortly to confirm your order. We appreciate your patience!'
+
 export function validOrderId(value:unknown){
   const id=Number(value)
   if(!Number.isSafeInteger(id)||id<1)throw createError({statusCode:400,statusMessage:'Invalid order ID'})
@@ -89,8 +92,11 @@ export function createCustomerOrder(visitorId:number,rawItems:unknown){
     connection.prepare('INSERT INTO customer_orders(order_id,visitor_id,service_date,total_centavos,created_at) VALUES(?,?,?,?,?)').run(id,visitorId,date,total,now)
     const insertLine=connection.prepare('INSERT INTO customer_order_items(order_id,menu_item_id,name,price_centavos,quantity,line_total_centavos) VALUES(?,?,?,?,?,?)')
     for(const line of lines)insertLine.run(id,line.id,line.name,line.price_centavos,line.quantity,line.lineTotal)
-    const greeting=connection.prepare("INSERT INTO order_messages(order_id,role,text,created_at) VALUES(?,'system',?,?)").run(id,`New order #${next} · ${lines.map(line=>`${line.quantity} × ${line.name}`).join(', ')} · ₱${(total/100).toFixed(2)}`,now)
-    connection.prepare('UPDATE customer_orders SET visitor_read_message_id=? WHERE order_id=?').run(greeting.lastInsertRowid,id)
+    connection.prepare("INSERT INTO order_messages(order_id,role,text,created_at) VALUES(?,'system',?,?)").run(id,`New order #${next} · ${lines.map(line=>`${line.quantity} × ${line.name}`).join(', ')} · ₱${(total/100).toFixed(2)}`,now)
+    // The auto-reply counts as a staff message, so it doesn't add to the staff's unread count.
+    // The customer gets both messages in the order response, so both start as read for them.
+    const reply=connection.prepare("INSERT INTO order_messages(order_id,role,text,created_at) VALUES(?,'staff',?,?)").run(id,ORDER_AUTO_REPLY,now)
+    connection.prepare('UPDATE customer_orders SET visitor_read_message_id=? WHERE order_id=?').run(reply.lastInsertRowid,id)
     return getOrder(id)!
   }).immediate()
   return order
@@ -137,7 +143,8 @@ export function postOrderMessage(id:number,role:'visitor'|'staff',text:unknown,v
   const clean=text.normalize('NFKC').replace(/[\p{C}]/gu,'').trim()
   if(!clean||clean.length>500)throw createError({statusCode:400,statusMessage:'Use 1–500 characters for your message'})
   const connection=db(),now=Date.now()
-  const last=connection.prepare('SELECT created_at FROM order_messages WHERE order_id=? AND role=? ORDER BY id DESC LIMIT 1').get(id,role) as {created_at:number}|undefined
+  // The automatic reply isn't a staff member typing, so it never holds up their first real reply.
+  const last=connection.prepare('SELECT created_at FROM order_messages WHERE order_id=? AND role=? AND text<>? ORDER BY id DESC LIMIT 1').get(id,role,ORDER_AUTO_REPLY) as {created_at:number}|undefined
   if(last&&now-last.created_at<1000)throw createError({statusCode:429,statusMessage:'Please wait before sending another message'})
   connection.prepare('INSERT INTO order_messages(order_id,role,text,created_at) VALUES(?,?,?,?)').run(id,role,clean,now)
   return orderDetail(id,visitorId)

@@ -13,7 +13,7 @@ export const scenes:Record<SceneId,SceneInfo>={
   // Kape & Chits, the 24/7 coffee tambayan next door: a room the size of the store (x 0..360), then a doorway onto
   // the open-air Tanaw Deck beside it (x 360..720). The camera follows the visitor between the two.
   cafe:{label:'Kape & Chits',width:720,height:580,floor:{minX:20,maxX:700,minY:260,maxY:542},spawn:{x:180,y:510}},
-  // Riding a jeepney: everyone aboard sits at a window (see jeepneySeats), on a trip through the countryside.
+  // Riding a jeepney: everyone aboard sits at a window (see jeepneySeats), on a trip from Tagaytay to Baguio, Albay and EDSA.
   // There's nowhere to walk; the floor is just the row of seats.
   jeepney:{label:'Jeepney',width:360,height:580,floor:{minX:20,maxX:340,minY:390,maxY:410},spawn:{x:44,y:400}},
 }

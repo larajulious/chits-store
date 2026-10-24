@@ -5,18 +5,21 @@ import {scenes} from '../shared/world'
 import * as art from './pixelArt'
 import * as ride from './jeepneyArt'
 import {cloudArt} from './deckArt'
-import {glowArt,sittingVisitorArt,vehicleArt} from './neighborhoodArt'
+import {glowArt,sittingVisitorArt,vehicleArt,type Vehicle} from './neighborhoodArt'
 import {HeldDrinks,createDrinkTextures} from './heldDrink'
 import {PaintedTexture} from './tanawView'
 import {manilaMinute,mixColor,moonArc,skyAt,sunArc,type Sky} from './scenery'
 import {BUBBLE_GAP,FADE_COLOR,FADE_MS,FONT,MIN_VIEW_W,NAME_TAG_GAP,PX,TAG_FONT,Tag,addTexture,characterPhase,createReactionTextures,reactionTexture,type Player,type WorldGame} from './common'
 
-// Riding a jeepney: the jeepney seen big from the side, rolling along a country road, everyone aboard at its open
-// windows. The world scrolls past it in layers (far mountains, rice paddies and the sea, palms and nipa huts and a
-// carabao, the road with oncoming traffic, the verge rushing by in front), coloured for the time of day. Nobody walks
+// Riding a jeepney: the jeepney seen big from the side, rolling along, everyone aboard at its open windows. The world
+// scrolls past it in layers (far mountains, the middle distance, the roadside, the road with oncoming traffic, the verge
+// rushing by in front), coloured for the time of day. The trip runs through four places in turn, each with its own
+// scenery and a landmark: Taal Lake from Tagaytay, the Lion's Head on Kennon Road, Mayon, then EDSA. Nobody walks
 // here; the page's "Para po!" gets the visitor off, in front of the store.
 export type JeepneyGame=WorldGame
 type Options={nickname:string;avatar:AvatarId;onAct:(action:CafeAction)=>void;reducedMotion?:boolean;zoom?:number;arriving?:boolean;skyMinute?:number;viewWidth?:number}
+type Layer=keyof typeof LAYERS
+type Landmark={image:Phaser.GameObjects.Image;x:number;speed:number;gap:number;leaving:boolean}
 type Rider={sprite:Phaser.GameObjects.Image;label:Tag;avatar:string;phase:number;seat:number;bubble?:Tag|Phaser.GameObjects.Image}
 
 const {width:W,height:H}=scenes.jeepney
@@ -28,7 +31,23 @@ const DEPTH={sky:.1,orb:.15,cloud:.2,ridge:.3,fields:.4,roadside:.5,road:.6,onco
 // Scenery layers (bottom edge in world y) and how fast each scrolls past (world units a second): nearer is faster.
 const LAYERS={ridge:{y:250,speed:6},fields:{y:300,speed:26},roadside:{y:360,speed:110},road:{y:480,speed:230},verge:{y:H,speed:300}}
 const TILE=256*PX,SIDE=900,SKY_BOTTOM=262
-const DRIVER_LINES=['Bayad po, salamat!','Kapit lang, may lubak!','Ang ganda ng tanawin, no?','Saan po kayo bababa?','Sabihin lang ang "Para po!"','Sarap ng hangin, ano?','Uy, may kalabaw!']
+const DRIVER_LINES=['Bayad po, salamat!','Kapit lang, may lubak!','Ang ganda ng tanawin, no?','Saan po kayo bababa?','Sabihin lang ang "Para po!"','Sarap ng hangin, ano?']
+// Each leg of the trip lasts this long, and the next one's scenery fades in over this long.
+const LEG_MS=45_000,CROSSFADE_MS=1600
+// The trip, leg by leg (in ride.RIDE_LEGS order): the place's name, the route board, how fast the jeepney can go (EDSA
+// crawls), the ground colour behind the roadside, the landmark (where it starts, its bottom edge and depth, how fast it
+// drifts with the scenery and on its own, the gap before it comes round again, how much distance haze it takes), the
+// oncoming traffic, and the driver's lines (the first is said on arrival).
+const LEGS:Record<ride.RideLeg,{place:string;board:string;pace:number;ground:number;landmark:{x:number;y:number;depth:number;drift:number;own:number;gap:number;haze:number};traffic:readonly Vehicle[];lines:readonly string[]}>={
+  taal:{place:'Tagaytay · Taal Lake view',board:'TAGAYTAY',pace:1,ground:0x8fbf6a,landmark:{x:250,y:282,depth:.45,drift:4,own:0,gap:120,haze:.3},traffic:['car','tricycle'],
+    lines:['Ayan na ang Bulkang Taal!','Bulalo tayo mamaya?','Ang lamig ng hangin sa Tagaytay!','Pasalubong: buko pie!']},
+  baguio:{place:"Kennon Road · Lion's Head, Baguio",board:'BAGUIO',pace:.8,ground:0x5f8a52,landmark:{x:280,y:344,depth:.49,drift:24,own:0,gap:260,haze:0},traffic:['car','jeepney'],
+    lines:["Ayan ang Lion's Head! Picture tayo!",'Kapit, paakyat ng Kennon!','Strawberry taho, sino gusto?','Ramdam na ang lamig ng Baguio!']},
+  mayon:{place:'Albay · Mayon Volcano',board:'LEGAZPI',pace:1,ground:0x8fbf6a,landmark:{x:230,y:256,depth:.35,drift:4,own:0,gap:120,haze:.4},traffic:['car','tricycle'],
+    lines:['Ayan na ang Mayon! Perfect cone!','Daragang Magayon, ang ganda!','Bicol Express mamaya?','Uy, may kalabaw!']},
+  edsa:{place:'Metro Manila · EDSA',board:'EDSA - CUBAO',pace:.45,ground:0xbdb7ac,landmark:{x:300,y:241,depth:.41,drift:26,own:120,gap:700,haze:0},traffic:['car','jeepney'],
+    lines:['EDSA na! Traffic na naman.','Cubao, Cubao! Sakay na!','Ayan ang MRT, siksikan din!','Kapit lang, usad-pagong tayo.']},
+}
 const pick=<T>(lines:readonly T[])=>lines[Math.floor(Math.random()*lines.length)]!
 // A colour multiplied by another, like the painted scenery (for the plain ground strip under the roadside).
 const multiply=(a:number,b:number)=>[16,8,0].reduce((out,shift)=>out|Math.round(((a>>shift)&255)*((b>>shift)&255)/255)<<shift,0)
@@ -44,13 +63,23 @@ class JeepneyScene extends Phaser.Scene{
   private remotes=new Map<string,Rider>()
   private drinks?:HeldDrinks
   private skyKey=''
+  private sky?:Sky
   private night=false
   private skyGfx?:Phaser.GameObjects.Graphics
   private ground?:Phaser.GameObjects.Graphics
   private orb?:{body:Phaser.GameObjects.Image;glow:Phaser.GameObjects.Image}
   private clouds:Phaser.GameObjects.Image[]=[]
   private painted:{texture:PaintedTexture;color:(sky:Sky)=>number}[]=[]
-  private layers:{images:Phaser.GameObjects.Image[];speed:number;offset:number}[]=[]
+  // Each layer's rows of tiles: one, or two while the next leg's fades in over the last one's.
+  private layers:{name:Layer;rows:Phaser.GameObjects.Image[][];speed:number;offset:number}[]=[]
+  private legIndex=0
+  private legEndsAt=0
+  private landmarks:Landmark[]=[]
+  private board?:Phaser.GameObjects.Text
+  private placeTag?:Tag
+  private introLine=''
+  private wheelTurn=0
+  private viewW=MIN_VIEW_W
   // The jeepney's parts, each with the y it rests at: a bump lifts them all a pixel.
   private jeep:{object:Phaser.GameObjects.Image|Phaser.GameObjects.Text;y:number}[]=[]
   private interior?:Phaser.GameObjects.Image
@@ -75,8 +104,7 @@ class JeepneyScene extends Phaser.Scene{
     this.skyGfx=this.add.graphics().setDepth(DEPTH.sky)
     this.orb={glow:this.sprite(292,92,'ride-glow',DEPTH.orb).setBlendMode(Phaser.BlendModes.ADD),body:this.sprite(292,92,'ride-sun',DEPTH.orb+.01)}
     this.clouds=[[-260,46],[120,88],[520,58],[860,100]].map(([x,y])=>this.sprite(x!,y!,'ride-cloud',DEPTH.cloud))
-    const row=(key:string,bottom:number,depth:number)=>Array.from({length:Math.ceil((W+SIDE*2)/TILE)+1},(_,i)=>this.add.image(-SIDE+i*TILE,bottom,key).setOrigin(0,1).setScale(PX).setDepth(depth))
-    this.layers=(Object.keys(LAYERS) as (keyof typeof LAYERS)[]).map(name=>({images:row(`ride-${name}`,LAYERS[name].y,DEPTH[name]),speed:LAYERS[name].speed,offset:0}))
+    this.layers=(Object.keys(LAYERS) as Layer[]).map(name=>({name,rows:[],speed:LAYERS[name].speed,offset:0}))
     // Fields' ground behind the roadside, so no sky shows between the paddies and the palms.
     this.ground=this.add.graphics().setDepth(DEPTH.fields-.01)
     // The jeepney: cab behind the riders, body in front, wheels, its lettering; exhaust behind and a headlight ahead.
@@ -85,14 +113,15 @@ class JeepneyScene extends Phaser.Scene{
     this.body=part(this.add.image(0,JEEP_TOP,'ride-body-day').setOrigin(0).setScale(PX).setDepth(DEPTH.body))
     this.wheels=ride.JEEP.wheels.map(x=>part(this.sprite(x*PX,JEEP_TOP+ride.JEEP.wheelY*PX,'ride-wheel-0',DEPTH.wheel)))
     const lettering=(x:number,y:number,value:string,color:string)=>part(this.add.text(x,y,value,{fontFamily:FONT,fontSize:'8px',color,resolution:this.zoom}).setOrigin(.5).setDepth(DEPTH.text))
-    lettering(238,JEEP_TOP+7,'CHITS - TANAW','#c8553d');lettering(154,JEEP_TOP+85,'CHITS EXPRESS','#a8432f')
+    this.board=lettering(238,JEEP_TOP+7,'CHITS - TANAW','#c8553d');lettering(154,JEEP_TOP+85,'CHITS EXPRESS','#a8432f')
     this.exhaust=this.add.graphics().setDepth(DEPTH.exhaust)
     // The headlight's pool lies flat on the road ahead of the jeepney.
     this.headlight=this.add.image(W+60,JEEP_BOTTOM-8,'ride-beam').setScale(PX).setDepth(DEPTH.light).setBlendMode(Phaser.BlendModes.ADD).setVisible(false)
+    this.enterLeg(0)
     this.applySky()
     this.time.addEvent({delay:30_000,loop:true,callback:()=>this.applySky()})
     const now=this.time.now
-    this.nextLineAt=now+(this.opts.arriving?1400:6000);this.nextBumpAt=now+2500;this.nextOncomingAt=now+3500
+    this.nextBumpAt=now+2500;this.nextOncomingAt=now+3500
     const avatar=this.textures.exists(this.opts.avatar)?this.opts.avatar:'mochi'
     this.self=this.rider(0,avatar,this.opts.nickname,characterPhase(this.opts.nickname))
     this.drinks=new HeldDrinks(this,[],()=>Boolean(this.opts.reducedMotion))
@@ -107,14 +136,19 @@ class JeepneyScene extends Phaser.Scene{
     }
     for(const night of [false,true]){const time=night?'night':'day';texture(`ride-interior-${time}`,ride.interiorArt(night));texture(`ride-body-${time}`,ride.bodyArt(night))}
     for(const frame of [0,1,2,3] as const)texture(`ride-wheel-${frame}`,ride.wheelArt(frame))
-    for(const kind of ['car','tricycle'] as const)for(let paint=0;paint<4;paint++)texture(`oncoming-${kind}-${paint}`,vehicleArt(kind,paint,0))
+    for(const kind of ['car','tricycle','jeepney'] as const)for(let paint=0;paint<4;paint++)texture(`oncoming-${kind}-${paint}`,vehicleArt(kind,paint,0))
     texture('ride-sun',new art.PixelArt(16,16).ellipse(8,8,7.5,7.5,'#fff6dc').ellipse(8,8,6,6,'#ffffff'))
     texture('ride-moon',new art.PixelArt(14,14).ellipse(7,7,6.5,6.5,'#f6f1de').set(5,5,'#ddd5bb').set(8,8,'#ddd5bb').set(9,4,'#ddd5bb').set(4,8,'#ddd5bb'))
     texture('ride-glow',glowArt(22,'#ffffff'));texture('ride-beam',new art.PixelArt(64,14).ellipse(32,7,31.5,6.5,'#ffd97a50').ellipse(26,7,22,4.6,'#ffe9a870').ellipse(18,7,12,3,'#fff3c490'))
     // Scenery painted for the time of day: mountains in the sky's own blue, the rest warmed at sunset and dimmed at night.
     const paint=(key:string,pixels:art.PixelArt,color:(sky:Sky)=>number)=>this.painted.push({texture:new PaintedTexture(this,key,pixels),color})
-    paint('ride-ridge',ride.rideRidgeArt(),sky=>sky.far);paint('ride-fields',ride.rideFieldsArt(),dusk);paint('ride-roadside',ride.rideRoadsideArt(),dusk)
-    paint('ride-road',ride.rideRoadArt(),dusk);paint('ride-verge',ride.rideVergeArt(),dusk)
+    // Landmarks further off take on some of the mountains' haze.
+    for(const leg of ride.RIDE_LEGS){
+      const scenery=ride.LEG_SCENERY[leg],haze=LEGS[leg].landmark.haze
+      paint(`ride-${leg}-ridge`,scenery.ridge(),sky=>sky.far)
+      for(const layer of ['fields','roadside','road','verge'] as const)paint(`ride-${leg}-${layer}`,scenery[layer](),dusk)
+      paint(`ride-${leg}-landmark`,scenery.landmark(),sky=>mixColor(dusk(sky),sky.far,haze))
+    }
     paint('ride-cloud',cloudArt(),sky=>sky.dark>.3?mixColor(sky.mid,0xffffff,.3):mixColor(0xffffff,sky.horizon,.25))
     createReactionTextures(this);createDrinkTextures(this)
   }
@@ -122,14 +156,14 @@ class JeepneyScene extends Phaser.Scene{
     const minute=this.opts.skyMinute??manilaMinute(),sky=skyAt(minute),sunAt=sunArc(minute),moonAt=moonArc(minute)
     const key=JSON.stringify([sky,sunAt===undefined,moonAt===undefined])
     if(key===this.skyKey)return
-    this.skyKey=key;this.night=sky.dark>.3
+    this.skyKey=key;this.sky=sky;this.night=sky.dark>.3
     const g=this.skyGfx!
     g.clear()
     for(let i=0;i<15;i++){const t=i/14;g.fillStyle(t<.6?mixColor(sky.top,sky.mid,t/.6):mixColor(sky.mid,sky.horizon,(t-.6)/.4)).fillRect(-SIDE,i*SKY_BOTTOM/15,W+SIDE*2,SKY_BOTTOM/15+1)}
     for(let i=0;i<30&&sky.stars>0;i++)g.fillStyle(0xfff6dc,sky.stars*(i<6?1:.6)).fillRect(snap(-SIDE+(i*173)%(W+SIDE*2)),snap(8+(i*53)%150),i<6?PX:PX/2,i<6?PX:PX/2)
     this.cameras.main.setBackgroundColor(sky.horizon)
     for(const {texture,color} of this.painted)texture.paint(color(sky))
-    this.ground?.clear().fillStyle(multiply(0x8fbf6a,dusk(sky))).fillRect(-SIDE,LAYERS.fields.y-4,W+SIDE*2,LAYERS.roadside.y-LAYERS.fields.y)
+    this.drawGround()
     for(const cloud of this.clouds)cloud.setAlpha(1-sky.dark*.55)
     // The sun by day, the moon by night, hanging still above the mountains as the jeepney rolls on.
     const orb=this.orb!,sun=sunAt!==undefined,up=sun||moonAt!==undefined
@@ -138,6 +172,59 @@ class JeepneyScene extends Phaser.Scene{
     const time=this.night?'night':'day'
     this.interior?.setTexture(`ride-interior-${time}`);this.body?.setTexture(`ride-body-${time}`)
     this.headlight?.setVisible(sky.lights>.05).setAlpha(sky.lights)
+  }
+  private drawGround(){
+    if(this.sky)this.ground?.clear().fillStyle(multiply(LEGS[this.leg].ground,dusk(this.sky))).fillRect(-SIDE,LAYERS.fields.y-4,W+SIDE*2,LAYERS.roadside.y-LAYERS.fields.y)
+  }
+  private get leg(){return ride.RIDE_LEGS[this.legIndex%ride.RIDE_LEGS.length]!}
+  // One layer's row of tiles for a leg, laid from the layer's current scroll offset.
+  private row(leg:ride.RideLeg,layer:Layer,offset:number){
+    const shift=snap(offset)
+    return Array.from({length:Math.ceil((W+SIDE*2)/TILE)+1},(_,i)=>this.add.image(-SIDE+i*TILE-shift,LAYERS[layer].y,`ride-${leg}-${layer}`).setOrigin(0,1).setScale(PX).setDepth(DEPTH[layer]))
+  }
+  // Arriving at a leg of the trip: its scenery fades in over the last one's (which then fades from the gaps), its
+  // landmark comes into view, the route board changes, the place's name shows at the top and the driver points it out.
+  private enterLeg(index:number){
+    const now=this.time.now,fade=this.layers[0]!.rows.length>0&&!this.opts.reducedMotion
+    this.legIndex=index;this.legEndsAt=now+LEG_MS
+    const leg=this.leg,info=LEGS[leg]
+    for(const layer of this.layers){
+      const old=layer.rows[layer.rows.length-1],next=this.row(leg,layer.name,layer.offset)
+      layer.rows.push(next)
+      if(!old)continue
+      const drop=()=>{for(const image of old)image.destroy();layer.rows=layer.rows.filter(row=>row!==old)}
+      if(!fade){drop();continue}
+      for(const image of next)image.setAlpha(0)
+      this.tweens.add({targets:next,alpha:1,duration:CROSSFADE_MS,onComplete:()=>this.tweens.add({targets:old,alpha:0,duration:CROSSFADE_MS/2,onComplete:drop})})
+    }
+    for(const mark of this.landmarks){
+      if(mark.leaving)continue
+      mark.leaving=true
+      const drop=()=>{mark.image.destroy();this.landmarks=this.landmarks.filter(other=>other!==mark)}
+      if(fade)this.tweens.add({targets:mark.image,alpha:0,duration:CROSSFADE_MS,onComplete:drop});else drop()
+    }
+    const {x,y,depth,drift,own,gap}=info.landmark
+    const image=this.add.image(x,y,`ride-${leg}-landmark`).setOrigin(.5,1).setScale(PX).setDepth(depth)
+    if(fade){image.setAlpha(0);this.tweens.add({targets:image,alpha:1,duration:CROSSFADE_MS})}
+    this.landmarks.push({image,x,speed:drift*info.pace+own,gap,leaving:false})
+    this.board?.setText(info.board)
+    this.drawGround()
+    this.placeTag?.destroy()
+    const tag=this.tag(W/2,24,info.place).setDepth(903)
+    this.placeTag=tag
+    this.time.delayedCall(5000,()=>{if(this.placeTag===tag)this.placeTag=undefined;tag.destroy()})
+    this.introLine=info.lines[0]!;this.nextLineAt=now+1600
+  }
+  // Landmarks drift past at their own pace; one that leaves the screen comes round again after its gap.
+  private updateLandmarks(step:number){
+    const left=W/2-this.viewW/2,right=W/2+this.viewW/2
+    for(const mark of this.landmarks){
+      mark.x-=mark.speed*step
+      const half=mark.image.displayWidth/2
+      if(!mark.leaving&&mark.x+half<left)mark.x=right+half+mark.gap
+      const x=snap(mark.x)
+      if(mark.image.x!==x)mark.image.x=x
+    }
   }
   private rider(seat:number,avatar:string,name:string,phase:number):Rider{
     const sprite=this.sprite(0,RIDER_Y,`${avatar}-sit`,DEPTH.rider)
@@ -152,18 +239,21 @@ class JeepneyScene extends Phaser.Scene{
     const x=(ride.windowX(seat)+ride.JEEP.windowW/2)*PX
     rider.sprite.setPosition(x,RIDER_Y);rider.label.setPosition(x,TAG_Y[seat%2]!)
   }
-  // The ride: scenery and clouds scrolling past, wheels turning, a puff of exhaust, a bump now and then, oncoming
-  // traffic, blinking riders, the driver's chatter.
+  // The ride: the next leg when this one's up, scenery and clouds scrolling past (slower where traffic is heavy),
+  // landmarks, wheels turning, a puff of exhaust, a bump now and then, oncoming traffic, blinking riders, the driver's chatter.
   override update(_:number,delta:number){
-    const now=this.time.now,motion=!this.opts.reducedMotion,step=Math.min(delta,100)/1000
+    const now=this.time.now,motion=!this.opts.reducedMotion,step=Math.min(delta,100)/1000,pace=LEGS[this.leg].pace
+    if(now>=this.legEndsAt)this.enterLeg(this.legIndex+1)
     if(motion){
       for(const layer of this.layers){
-        layer.offset=(layer.offset+layer.speed*step)%TILE
+        layer.offset=(layer.offset+layer.speed*pace*step)%TILE
         const shift=snap(layer.offset)
-        layer.images.forEach((image,i)=>{const x=-SIDE+i*TILE-shift;if(image.x!==x)image.x=x})
+        for(const row of layer.rows)row.forEach((image,i)=>{const x=-SIDE+i*TILE-shift;if(image.x!==x)image.x=x})
       }
       for(const cloud of this.clouds){const x=cloud.x-step*8;cloud.x=x<-SIDE-60?W+SIDE+60:x}
-      const frame=Math.floor(now/70)%4
+      this.updateLandmarks(step)
+      this.wheelTurn=(this.wheelTurn+step*1000/70*pace)%4
+      const frame=Math.floor(this.wheelTurn)
       for(const wheel of this.wheels)if(wheel.texture.key!==`ride-wheel-${frame}`)wheel.setTexture(`ride-wheel-${frame}`)
       if(now>=this.nextBumpAt){this.bumpUntil=now+150;this.nextBumpAt=now+1600+Math.random()*2400}
       this.updateOncoming(now,step)
@@ -182,12 +272,14 @@ class JeepneyScene extends Phaser.Scene{
     if(now>=this.nextLineAt){
       this.nextLineAt=now+15_000+Math.random()*14_000
       this.driverBubble?.destroy()
-      const bubble=this.tag(300,JEEP_TOP-44,pick(DRIVER_LINES),TAG_FONT,140).setDepth(901)
+      const line=this.introLine||pick([...LEGS[this.leg].lines.slice(1),...DRIVER_LINES])
+      this.introLine=''
+      const bubble=this.tag(300,JEEP_TOP-44,line,TAG_FONT,140).setDepth(901)
       this.driverBubble=bubble
       this.time.delayedCall(3600,()=>{if(this.driverBubble===bubble)this.driverBubble=undefined;bubble.destroy()})
     }
   }
-  // Now and then a car or a tricycle comes the other way in the far lane.
+  // Now and then a car, a tricycle or a jeepney (whatever the place's roads carry) comes the other way in the far lane.
   private updateOncoming(now:number,step:number){
     const car=this.oncoming
     if(car){
@@ -197,8 +289,8 @@ class JeepneyScene extends Phaser.Scene{
       return
     }
     if(now<this.nextOncomingAt)return
-    const kind=Math.random()<.6?'car':'tricycle',x=W+SIDE+120
-    this.oncoming={image:this.add.image(x,412,`oncoming-${kind}-${Math.floor(Math.random()*4)}`).setOrigin(.5,1).setScale(PX).setFlipX(true).setDepth(DEPTH.oncoming),x,speed:480+Math.random()*120}
+    const {traffic,pace}=LEGS[this.leg],kind=Math.random()<.6?traffic[0]!:traffic[1]!,x=W+SIDE+120
+    this.oncoming={image:this.add.image(x,412,`oncoming-${kind}-${Math.floor(Math.random()*4)}`).setOrigin(.5,1).setScale(PX).setFlipX(true).setDepth(DEPTH.oncoming),x,speed:(480+Math.random()*120)*(.5+pace/2)}
   }
   // A few soft puffs from the back of the jeepney, drifting away and fading.
   private drawExhaust(now:number,motion:boolean){
@@ -213,7 +305,7 @@ class JeepneyScene extends Phaser.Scene{
     }
   }
   // The jeepney stays centred; wider screens see the countryside carry on past both ends.
-  private fitCamera(width:number){this.cameras.main.setSize(width*this.zoom,H*this.zoom).centerOn(W/2,H/2)}
+  private fitCamera(width:number){this.viewW=width;this.cameras.main.setSize(width*this.zoom,H*this.zoom).centerOn(W/2,H/2)}
   setViewWidth(width:number){
     if(!this.sys?.isActive())return
     this.scale.setGameSize(width*this.zoom,H*this.zoom)

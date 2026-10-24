@@ -119,8 +119,9 @@ export default defineWebSocketHandler({
   close(peer) { leaveRoom(peer.id) },
   error(peer) { leaveRoom(peer.id) },
 })
-// The café hears its whole music timeline; the street only its mood, which is the weather (rain for the rainy mood).
+// The café hears its whole music timeline, and so do jeepney riders (the café's music plays on the ride); the street
+// only its mood, which is the weather (rain for the rainy mood).
 function sendCafeMusic(peer:{send:(data:string)=>void},visitorId:number,scene:SceneId){
-  if(scene==='cafe')peer.send(JSON.stringify({type:'cafe_jukebox',state:cafeJukeboxState(),myVote:cafeVoteOf(visitorId)}))
+  if(scene==='cafe'||scene==='jeepney')peer.send(JSON.stringify({type:'cafe_jukebox',state:cafeJukeboxState(),myVote:cafeVoteOf(visitorId)}))
   else if(scene==='outside')peer.send(JSON.stringify({type:'cafe_mood',mood:cafeMood()}))
 }

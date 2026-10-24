@@ -65,7 +65,7 @@ const jukebox=ref<JukeboxState|null>(null),jukeboxVote=ref<JukeboxMyVote>(null),
 const catTaps=ref<CatTaps|null>(null)
 const musicStatus=ref<JukeboxListenStatus>('off'),musicOn=ref(false),musicVolume=ref(.35),musicVolumeAdjustable=ref(true)
 // The header indicator reads ON only while this visitor actually hears the shared music.
-const musicListening=computed(()=>musicOn.value&&(scene.value==='cafe'?cafeStatus.value==='playing':!['off','needs_gesture'].includes(musicStatus.value)))
+const musicListening=computed(()=>musicOn.value&&(cafeMusicHere.value?cafeStatus.value==='playing':!['off','needs_gesture'].includes(musicStatus.value)))
 const jukeboxScene=computed(()=>({playing:Boolean(jukebox.value?.enabled&&jukebox.value.nowPlaying),audible:musicStatus.value==='playing'}))
 let musicPlayer:JukeboxPlayer|undefined,pingSentAt=0
 let jukeboxClockTimer:ReturnType<typeof setInterval>|undefined,jukeboxVoteTimeout:ReturnType<typeof setTimeout>|undefined
@@ -77,7 +77,9 @@ const selfSeated=ref(false),selfDrink=ref<HeldDrink|null>(null)
 // How many are in Kape & Chits, for the sign outside; the server sends the count to the street only.
 const cafeInside=ref(0)
 // The café's shared music timeline (the mood also sets the café's weather: rain for the rainy mood), this visitor's
-// vote, and whether their device is playing it. "Music on" means the café jukebox in the café, the store's elsewhere.
+// vote, and whether their device is playing it. "Music on" means the café jukebox in the café and on the jeepney ride,
+// the store's elsewhere.
+const cafeMusicHere=computed(()=>scene.value==='cafe'||scene.value==='jeepney')
 const cafeJukebox=ref<CafeJukeboxState|null>(null),cafeVote=ref<CafeJukeboxVote>(null),cafePendingVote=ref(''),cafeVoteMessage=ref('')
 const cafeMood=computed<CafeMood|null>(()=>scene.value==='cafe'?cafeJukebox.value?.mood??null:null)
 const cafeStatus=ref<CafeMusicStatus>('off'),cafeVolume=ref(.5)
@@ -141,13 +143,13 @@ function setupMusic(){
   musicPlayer=createJukeboxPlayer(status=>{musicStatus.value=status})
   musicPlayer.setVolume(prefs.volume)
   // A remembered "on" still waits for the browser: the player asks for a tap if autoplay is blocked.
-  if(prefs.on&&scene.value!=='cafe')musicPlayer.enable()
+  if(prefs.on&&!cafeMusicHere.value)musicPlayer.enable()
   routeMusic()
 }
-// One "music on" choice: in the café it plays the café jukebox, anywhere else the store's. Never both at once.
+// One "music on" choice: in the café and on the jeepney it plays the café jukebox, anywhere else the store's. Never both at once.
 function routeMusic(){
   if(!musicPlayer)return
-  if(scene.value==='cafe'){
+  if(cafeMusicHere.value){
     musicPlayer.disable()
     cafeMusic??=createCafeMusic(status=>{cafeStatus.value=status},()=>musicPlayer?.serverNow()??Date.now())
     cafeVolume.value=cafeMusic.volume
@@ -164,8 +166,8 @@ watch(scene,routeMusic)
 function saveMusicPrefs(){saveJukeboxPrefs({on:musicOn.value,volume:musicVolume.value})}
 function toggleMusic(){
   if(!musicPlayer)return
-  // In the café the same switch tunes in to (or mutes) the café jukebox; a blocked start just needs this tap.
-  if(scene.value==='cafe'){
+  // In the café and on the jeepney the same switch tunes in to (or mutes) the café jukebox; a blocked start just needs this tap.
+  if(cafeMusicHere.value){
     if(musicOn.value&&cafeStatus.value==='blocked'){void cafeMusic?.play();return}
     musicOn.value=!musicOn.value;saveMusicPrefs();routeMusic();return
   }
@@ -536,7 +538,7 @@ async function changeScene(target:SceneId){
 }
 function enterScene(target:SceneId){
   // Seats stay behind (drinks come along); the café's music hands back to the store's jukebox (see routeMusic).
-  if(target!=='cafe')cafeJukebox.value=null
+  if(target!=='cafe'&&target!=='jeepney')cafeJukebox.value=null
   selfSeated.value=false
   transitionPlayers=[];scene.value=target;saveVisitScene(target)
   transitioning.value=true
@@ -557,7 +559,7 @@ async function leave(){
     <button v-if="fullscreenSupported" type="button" class="fullscreen-toggle" :aria-label="fullscreen?'Exit fullscreen':'Play fullscreen'" :aria-pressed="fullscreen" :title="fullscreen?'Exit fullscreen (Esc)':'Fullscreen'" @click="toggleFullscreen"><StoreGlyph :name="fullscreen?'collapse':'expand'"/></button>
     <div class="visit-status">
       <span class="connection-pill" :class="{ready:connected}" role="status"><span class="connection-dot" aria-hidden="true"/>{{ connected?`${online} online`:'Connecting' }}</span>
-      <button type="button" class="music-toggle" data-music-control :aria-label="scene==='cafe'?(musicListening?'Mute café music':'Turn on café music'):musicListening?'Mute jukebox music':'Turn on jukebox music'" :aria-pressed="musicListening" :title="scene!=='cafe'&&jukebox?.enabled&&jukebox.nowPlaying?`Now playing: ${jukebox.nowPlaying.track.title}`:undefined" :disabled="!me||returningHome" @click="toggleMusic"><StoreGlyph name="note"/>{{ musicListening?'Music on':'Music off' }}</button>
+      <button type="button" class="music-toggle" data-music-control :aria-label="cafeMusicHere?(musicListening?'Mute café music':'Turn on café music'):musicListening?'Mute jukebox music':'Turn on jukebox music'" :aria-pressed="musicListening" :title="!cafeMusicHere&&jukebox?.enabled&&jukebox.nowPlaying?`Now playing: ${jukebox.nowPlaying.track.title}`:undefined" :disabled="!me||returningHome" @click="toggleMusic"><StoreGlyph name="note"/>{{ musicListening?'Music on':'Music off' }}</button>
     </div>
   </header>
   <template v-if="me&&!returningHome">

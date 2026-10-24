@@ -28,7 +28,8 @@ function start(mood:CafeMood){
   broadcastScene('outside',{type:'cafe_mood',mood})
 }
 function current(){if(!session)start('cafe');return session!}
-function broadcastState(){clearTimeout(voteTimer);voteTimer=undefined;broadcastScene('cafe',{type:'cafe_jukebox',state:cafeJukeboxState()})}
+// Jeepney riders hear the café's music too, so they follow its timeline (they can't vote: see voteCafeMood).
+function broadcastState(){clearTimeout(voteTimer);voteTimer=undefined;const state={type:'cafe_jukebox',state:cafeJukeboxState()};broadcastScene('cafe',state);broadcastScene('jeepney',state)}
 
 export function cafeJukeboxState():CafeJukeboxState{
   const {mood,startedAt,round}=current(),counts=tally()

@@ -8,14 +8,20 @@ const storeOpen=ref(false),statusReady=ref(false)
 let statusTimer:ReturnType<typeof setInterval>|undefined
 const visitThanks=useState<boolean>('visit-thanks',()=>false)
 const thanksDialog=ref<{open:()=>void}|null>(null)
+const liveOrdersDialog=ref<{open:()=>void}|null>(null)
+// Live orders greet visitors on arrival when the store is open (decided by the first status check); a returning thank-you takes its place.
+let liveOrdersShown=false
 onMounted(()=>{
-  if(visitThanks.value){visitThanks.value=false;thanksDialog.value?.open()}
+  if(visitThanks.value){visitThanks.value=false;liveOrdersShown=true;thanksDialog.value?.open()}
   void refreshStoreStatus()
   statusTimer=setInterval(()=>void refreshStoreStatus(),15_000)
 })
 onBeforeUnmount(()=>clearInterval(statusTimer))
 async function refreshStoreStatus(){
-  try{const status=await $fetch<{open:boolean}>('/api/store/status');storeOpen.value=status.open;statusReady.value=true}
+  try{
+    const status=await $fetch<{open:boolean}>('/api/store/status');storeOpen.value=status.open;statusReady.value=true
+    if(!liveOrdersShown){liveOrdersShown=true;if(status.open)liveOrdersDialog.value?.open()}
+  }
   catch{storeOpen.value=false;statusReady.value=false}
 }
 async function enter() {
@@ -38,5 +44,6 @@ async function enter() {
   <div>
     <StructuredEntrance v-model:avatar="avatar" :saving="saving" :error="error" :store-open="storeOpen" :status-ready="statusReady" @enter="enter"/>
     <VisitDialog ref="thanksDialog" variant="thanks"/>
+    <LiveOrdersDialog ref="liveOrdersDialog"/>
   </div>
 </template>
